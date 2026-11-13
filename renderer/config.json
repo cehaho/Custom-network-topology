@@ -1,7 +1,10 @@
 {
+  "schemaVersion": 1,
   "settings": {
     "showGrid": true,
-    "gridSize": 100
+    "gridSize": 100,
+    "snapToGrid": true,
+    "theme": "dark"
   },
   "nodes": [
     {
@@ -9,48 +12,170 @@
       "name": "Gateway Router",
       "address": "192.168.1.1",
       "port": null,
-      "primaryParentId": null,
-      "secondaryParentId": null,
       "icon": "router",
       "iconType": "lucide",
       "x": 50,
-      "y": 85
+      "y": 85,
+      "ports": [
+        {
+          "id": "node_gateway_in",
+          "name": "IN",
+          "side": "top"
+        },
+        {
+          "id": "node_gateway_out",
+          "name": "OUT",
+          "side": "bottom"
+        }
+      ]
     },
     {
       "id": "node_internet",
       "name": "Internet",
       "address": "8.8.8.8",
       "port": null,
-      "primaryParentId": "node_gateway",
-      "secondaryParentId": null,
       "icon": "globe",
       "iconType": "lucide",
       "x": 50,
-      "y": 15
+      "y": 15,
+      "ports": [
+        {
+          "id": "node_internet_in",
+          "name": "IN",
+          "side": "top"
+        },
+        {
+          "id": "node_internet_out",
+          "name": "OUT",
+          "side": "bottom"
+        }
+      ]
     },
     {
       "id": "node_nas",
       "name": "NAS Storage",
       "address": "192.168.1.100",
       "port": null,
-      "primaryParentId": "node_gateway",
-      "secondaryParentId": null,
       "icon": "hard-drive",
       "iconType": "lucide",
       "x": 30,
-      "y": 50
+      "y": 50,
+      "ports": [
+        {
+          "id": "node_nas_in",
+          "name": "IN",
+          "side": "top"
+        },
+        {
+          "id": "node_nas_out",
+          "name": "OUT",
+          "side": "bottom"
+        }
+      ]
     },
     {
       "id": "node_pc",
       "name": "Workstation",
       "address": "192.168.1.50",
       "port": null,
-      "primaryParentId": "node_gateway",
-      "secondaryParentId": null,
       "icon": "monitor",
       "iconType": "lucide",
       "x": 70,
-      "y": 50
+      "y": 50,
+      "ports": [
+        {
+          "id": "node_pc_in",
+          "name": "IN",
+          "side": "top"
+        },
+        {
+          "id": "node_pc_out",
+          "name": "OUT",
+          "side": "bottom"
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "link_node_internet_primary",
+      "sourceNodeId": "node_gateway",
+      "sourcePortId": "node_gateway_out",
+      "targetNodeId": "node_internet",
+      "targetPortId": "node_internet_in",
+      "role": "primary",
+      "medium": null,
+      "speed": null
+    },
+    {
+      "id": "link_node_nas_primary",
+      "sourceNodeId": "node_gateway",
+      "sourcePortId": "node_gateway_out",
+      "targetNodeId": "node_nas",
+      "targetPortId": "node_nas_in",
+      "role": "primary",
+      "medium": null,
+      "speed": null
+    },
+    {
+      "id": "link_node_pc_primary",
+      "sourceNodeId": "node_gateway",
+      "sourcePortId": "node_gateway_out",
+      "targetNodeId": "node_pc",
+      "targetPortId": "node_pc_in",
+      "role": "primary",
+      "medium": null,
+      "speed": null
+    }
+  ],
+  "ports": [
+    {
+      "id": "node_gateway_in",
+      "name": "IN",
+      "side": "top",
+      "nodeId": "node_gateway"
+    },
+    {
+      "id": "node_gateway_out",
+      "name": "OUT",
+      "side": "bottom",
+      "nodeId": "node_gateway"
+    },
+    {
+      "id": "node_internet_in",
+      "name": "IN",
+      "side": "top",
+      "nodeId": "node_internet"
+    },
+    {
+      "id": "node_internet_out",
+      "name": "OUT",
+      "side": "bottom",
+      "nodeId": "node_internet"
+    },
+    {
+      "id": "node_nas_in",
+      "name": "IN",
+      "side": "top",
+      "nodeId": "node_nas"
+    },
+    {
+      "id": "node_nas_out",
+      "name": "OUT",
+      "side": "bottom",
+      "nodeId": "node_nas"
+    },
+    {
+      "id": "node_pc_in",
+      "name": "IN",
+      "side": "top",
+      "nodeId": "node_pc"
+    },
+    {
+      "id": "node_pc_out",
+      "name": "OUT",
+      "side": "bottom",
+      "nodeId": "node_pc"
     }
   ]
 }

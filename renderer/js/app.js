@@ -3,7 +3,8 @@
 // ============================================
 
 // State
-let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true, theme: 'dark' }, nodes: [], connections: [] };
+let config = Topology.emptyDocument();
+let adminOpen = false;
 let networkData = [];
 let terminals = new Map();
 let activeTerminal = null;
@@ -70,33 +71,25 @@ async function init() {
   if (window.electronAPI) startMonitoring();
 }
 
-function normalizeLoadedConfig(raw) {
-  if (Array.isArray(raw)) {
-    return {
-      settings: { showGrid: true, gridSize: 100, snapToGrid: true },
-      nodes: raw,
-      connections: []
-    };
-  }
-  const source = raw && typeof raw === 'object' ? raw : {};
-  return {
-    settings: { showGrid: true, gridSize: 100, snapToGrid: true, ...(source.settings || {}) },
-    nodes: Array.isArray(source.nodes) ? source.nodes : [],
-    connections: Array.isArray(source.connections) ? source.connections : []
-  };
-}
-
 async function loadConfig() {
   try {
+    let raw = null;
     if (window.electronAPI) {
-      config = normalizeLoadedConfig(await window.electronAPI.config.load());
+      raw = await window.electronAPI.config.load();
     } else {
       const res = await fetch('config.json');
-      if (res.ok) config = normalizeLoadedConfig(await res.json());
+      if (res.ok) raw = await res.json();
     }
+    if (raw === null) return;
 
-    // Migrate legacy data and ensure ports exist
-    migrateAndInitializePorts();
+    const loaded = Topology.read(raw);
+    if (!loaded.ok) {
+      console.error(loaded.error);
+      toastError('Topology refused', loaded.error);
+      return;
+    }
+    config = loaded.document;
+    if (loaded.changed && window.electronAPI) await saveConfig();
 
     updateSnapButton();
     renderTree(config.nodes);
@@ -106,98 +99,118 @@ async function loadConfig() {
   }
 }
 
-// Migrate old primaryParentId/secondaryParentId to connections and ensure ports
-function migrateAndInitializePorts() {
-  let needsSave = false;
-
-  config.nodes.forEach(node => {
-    // Ensure node has ports array
-    if (!node.ports || node.ports.length === 0) {
-      node.ports = [
-        { id: `${node.id}_in`, name: 'IN', side: 'top' },
-        { id: `${node.id}_out`, name: 'OUT', side: 'bottom' }
-      ];
-      needsSave = true;
-    }
-
-    // Migrate legacy primaryParentId to connection
-    if (node.primaryParentId) {
-      const parentNode = config.nodes.find(n => n.id === node.primaryParentId);
-      if (parentNode) {
-        // Ensure parent has ports
-        if (!parentNode.ports || parentNode.ports.length === 0) {
-          parentNode.ports = [
-            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
-            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
-          ];
-        }
-
-        // Check if connection already exists
-        const existingConn = config.connections.find(c =>
-          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id
-        );
-
-        if (!existingConn) {
-          config.connections.push({
-            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            sourceNodeId: parentNode.id,
-            sourcePortId: `${parentNode.id}_out`,
-            targetNodeId: node.id,
-            targetPortId: `${node.id}_in`,
-            linkType: node.linkType || null,
-            linkSpeed: node.linkSpeed || null,
-            isFailover: false
-          });
-          needsSave = true;
-        }
-      }
-    }
-
-    // Migrate legacy secondaryParentId to failover connection
-    if (node.secondaryParentId) {
-      const parentNode = config.nodes.find(n => n.id === node.secondaryParentId);
-      if (parentNode) {
-        if (!parentNode.ports || parentNode.ports.length === 0) {
-          parentNode.ports = [
-            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
-            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
-          ];
-        }
-
-        const existingConn = config.connections.find(c =>
-          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id && c.isFailover
-        );
-
-        if (!existingConn) {
-          config.connections.push({
-            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            sourceNodeId: parentNode.id,
-            sourcePortId: `${parentNode.id}_out`,
-            targetNodeId: node.id,
-            targetPortId: `${node.id}_in`,
-            linkType: null,
-            linkSpeed: null,
-            isFailover: true
-          });
-          needsSave = true;
-        }
-      }
-    }
-  });
-
-  if (needsSave) {
-    saveConfig();
+async function saveConfig() {
+  const prepared = Topology.prepare(config);
+  if (!prepared.ok) {
+    console.error(prepared.error);
+    return { success: false, error: prepared.error };
+  }
+  config = prepared.document;
+  try {
+    if (window.electronAPI) return await window.electronAPI.config.save(config);
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to save config:', error);
+    return { success: false, error: error && error.message ? error.message : 'Save failed' };
   }
 }
 
-async function saveConfig() {
-  try {
-    if (window.electronAPI) {
-      await window.electronAPI.config.save(config);
-    }
-  } catch (error) {
-    console.error('Failed to save config:', error);
+async function importTopologyInteractive() {
+  if (!window.electronAPI) return null;
+  const result = await window.electronAPI.config.import();
+  if (!result || result.canceled) return null;
+  if (!result.success || !result.config) {
+    toastError('Import refused', (result && result.error) || 'Import failed');
+    return null;
   }
+  const loaded = Topology.read(result.config);
+  if (!loaded.ok) {
+    toastError('Import refused', loaded.error);
+    return null;
+  }
+  if (!window.confirm(Topology.importMessage(loaded.document))) return null;
+  return loaded.document;
+}
+
+async function applyImportedTopology(document) {
+  config = document;
+  const saved = await saveConfig();
+  if (saved && saved.success === false) {
+    toastError('Import refused', saved.error);
+    return false;
+  }
+  updateSnapButton();
+  if (monitoringActive) {
+    await stopMonitoring();
+    await startMonitoring();
+  } else {
+    renderTree(config.nodes);
+    renderHostList(config.nodes);
+  }
+  const counts = Topology.summary(config);
+  toastSuccess('Configuration imported', `${counts.nodes} nodes, ${counts.links} links`);
+  return true;
+}
+
+function parentIdOf(nodeId, role) {
+  return Topology.parentNodeId(config, nodeId, role);
+}
+
+function openAdminPanel() {
+  adminOpen = true;
+  Admin.open({
+    embedded: true,
+    getDocument: () => config,
+    replaceDocument: (document) => {
+      config = document;
+    },
+    persist: async () => {
+      const result = await saveConfig();
+      if (monitoringActive && (!result || result.success !== false)) {
+        await stopMonitoring();
+        await startMonitoring();
+      }
+      return result || { success: true };
+    },
+    onClose: () => {
+      adminOpen = false;
+      if (monitoringActive && networkData.length) {
+        const known = new Set(config.nodes.map((node) => node.id));
+        networkData = networkData.filter((node) => known.has(node.id));
+        networkData.forEach((node) => {
+          const configNode = config.nodes.find((candidate) => candidate.id === node.id);
+          if (!configNode) return;
+          node.name = configNode.name;
+          node.address = configNode.address;
+          node.port = configNode.port;
+          node.icon = configNode.icon;
+          node.iconType = configNode.iconType;
+          node.ports = configNode.ports;
+          node.isContainer = configNode.isContainer;
+          node.containerType = configNode.containerType;
+          node.containerId = configNode.containerId;
+          node.zoneId = configNode.zoneId;
+          node.zones = configNode.zones;
+          node.expanded = configNode.expanded;
+          node.x = configNode.x;
+          node.y = configNode.y;
+        });
+        config.nodes.forEach((node) => {
+          if (!networkData.some((candidate) => candidate.id === node.id)) {
+            networkData.push(JSON.parse(JSON.stringify(node)));
+          }
+        });
+        renderTree(networkData);
+        renderHostList(networkData);
+      } else {
+        renderTree(config.nodes);
+        renderHostList(config.nodes);
+      }
+      updateSnapButton();
+      updateMinimap();
+    },
+    importDocument: importTopologyInteractive
+  });
 }
 
 // ============================================
@@ -328,6 +341,7 @@ function setupEventListeners() {
 
   // Context menu
   document.addEventListener('click', (e) => {
+    if (adminOpen) return;
     hideContextMenu();
     // Deselect connection when clicking outside of connections
     if (!e.target.closest('.connection-group') && !e.target.closest('.node-container')) {
@@ -342,6 +356,13 @@ function setupEventListeners() {
 
   // Keyboard events - consolidated handler
   document.addEventListener('keydown', (e) => {
+    if (adminOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        Admin.requestClose();
+      }
+      return;
+    }
     // Check if user is typing in an input field or inside a modal
     const isInModal = e.target.closest('.modal') || e.target.closest('.modal-overlay');
     const isTyping = e.target.tagName === 'INPUT' ||
@@ -386,34 +407,25 @@ function setupEventListeners() {
 
   // Toolbar buttons
   document.getElementById('btn-admin').addEventListener('click', () => {
-    window.location.href = 'admin.html';
+    openAdminPanel();
   });
 
   document.getElementById('btn-discover').addEventListener('click', openDiscoveryModal);
   document.getElementById('btn-snap').addEventListener('click', toggleSnapToGrid);
 
   document.getElementById('btn-import').addEventListener('click', async () => {
-    if (!window.electronAPI) return;
-    const result = await window.electronAPI.config.import();
-    if (!result.success || !result.config) return;
-
-    config = normalizeLoadedConfig(result.config);
-    migrateAndInitializePorts();
-    updateSnapButton();
-    if (monitoringActive) {
-      await stopMonitoring();
-      await startMonitoring();
-    } else {
-      renderTree(config.nodes);
-      renderHostList(config.nodes);
-    }
-    toastSuccess('Configuration imported', `${config.nodes.length} nodes loaded`);
+    const imported = await importTopologyInteractive();
+    if (imported) await applyImportedTopology(imported);
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
-    if (window.electronAPI) {
-      await window.electronAPI.config.export(config);
+    if (!window.electronAPI) return;
+    const prepared = Topology.prepare(config);
+    if (!prepared.ok) {
+      toastError('Export refused', prepared.error);
+      return;
     }
+    await window.electronAPI.config.export(prepared.document);
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
@@ -470,18 +482,22 @@ function renderTree(nodes) {
   container.innerHTML = '';
 
   const nodeMap = {};
+  const primaryById = {};
+  const secondaryById = {};
   nodes.forEach(n => {
-    n.primaryParentId = (n.primaryParentId && n.primaryParentId !== '') ? n.primaryParentId : null;
-    n.activeParentId = (n.activeParentId && n.activeParentId !== '') ? n.activeParentId : n.primaryParentId;
+    primaryById[n.id] = parentIdOf(n.id, 'primary');
+    secondaryById[n.id] = parentIdOf(n.id, 'failover');
+    n.activeParentId = n.activeParentId || primaryById[n.id];
     n.level = 0;
     nodeMap[n.id] = n;
   });
 
-  // Calculate levels
+  // Calculate levels from primary links. The parent id is not stored on the node.
   for (let i = 0; i < 6; i++) {
     nodes.forEach(n => {
-      if (n.primaryParentId && nodeMap[n.primaryParentId]) {
-        n.level = Math.max(n.level, nodeMap[n.primaryParentId].level + 1);
+      const parentId = primaryById[n.id];
+      if (parentId && nodeMap[parentId]) {
+        n.level = Math.max(n.level, nodeMap[parentId].level + 1);
       }
     });
   }
@@ -509,7 +525,7 @@ function renderTree(nodes) {
     Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
       const count = sidePorts.length;
       sidePorts.forEach((port, idx) => {
-        const isConnected = config.connections.some(c =>
+        const isConnected = config.links.some(c =>
           (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
           (c.targetNodeId === node.id && c.targetPortId === port.id)
         );
@@ -793,7 +809,7 @@ function renderTree(nodes) {
     el.style.pointerEvents = 'auto';
 
     const isUp = node.status === true;
-    const isFailover = node.activeParentId === node.secondaryParentId && node.secondaryParentId !== null;
+    const isFailover = secondaryById[node.id] && node.activeParentId === secondaryById[node.id];
     const iconHtml = generateIconHtml(node);
     const gridCell = getGridCell(node.x || 50, node.y || 50);
     const portsHtml = generatePortsHtml(node);
@@ -843,8 +859,8 @@ function drawLines() {
   svg.setAttribute('height', '300%');
   svg.innerHTML = '';
 
-  // Draw connections from config.connections array
-  config.connections.forEach(conn => {
+  // Draw connections from config.links array
+  config.links.forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;
@@ -873,7 +889,7 @@ function drawLines() {
     const sourceData = networkData.find(n => n.id === conn.sourceNodeId);
     const targetData = networkData.find(n => n.id === conn.targetNodeId);
     const isOnline = sourceData?.status && targetData?.status;
-    const baseColor = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+    const baseColor = conn.role === 'failover' ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
 
     // Create group for this connection
     const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -900,7 +916,7 @@ function drawLines() {
     group.appendChild(path);
 
     // Animated paths for active connections
-    if (isOnline || conn.isFailover) {
+    if (isOnline || conn.role === 'failover') {
       const pathFwd = document.createElementNS("http://www.w3.org/2000/svg", "path");
       pathFwd.setAttribute('d', d);
       pathFwd.setAttribute('fill', 'none');
@@ -933,13 +949,13 @@ function drawLines() {
     svg.appendChild(group);
 
     // Draw link speed/type label if available
-    if (conn.linkType || conn.linkSpeed) {
+    if (conn.medium || conn.speed) {
       const midX = (x1 + x2) / 2;
       const midY = (y1 + y2) / 2;
 
       let labelParts = [];
-      if (conn.linkType) labelParts.push(conn.linkType);
-      if (conn.linkSpeed) labelParts.push(conn.linkSpeed);
+      if (conn.medium) labelParts.push(conn.medium);
+      if (conn.speed) labelParts.push(conn.speed);
       const labelText = labelParts.join(' ');
 
       const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -1122,7 +1138,7 @@ function endConnection(e) {
     // Don't connect to same node
     if (targetNodeId !== connectionStart.nodeId) {
       // Check if connection already exists
-      const existingConn = config.connections.find(c =>
+      const existingConn = config.links.find(c =>
         (c.sourceNodeId === connectionStart.nodeId && c.sourcePortId === connectionStart.portId &&
          c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) ||
         (c.sourceNodeId === targetNodeId && c.sourcePortId === targetPortId &&
@@ -1136,15 +1152,15 @@ function endConnection(e) {
         saveStateForUndo(`Connect "${sourceNode?.name || connectionStart.nodeId}" to "${targetNode?.name || targetNodeId}"`);
 
         // Create new connection
-        config.connections.push({
+        config.links.push({
           id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           sourceNodeId: connectionStart.nodeId,
           sourcePortId: connectionStart.portId,
           targetNodeId: targetNodeId,
           targetPortId: targetPortId,
-          linkType: null,
-          linkSpeed: null,
-          isFailover: false
+          role: 'primary',
+          medium: null,
+          speed: null
         });
 
         saveConfig();
@@ -1183,7 +1199,7 @@ function deselectConnection() {
 function deleteSelectedConnection() {
   if (!selectedConnectionId) return;
 
-  const conn = config.connections.find(c => c.id === selectedConnectionId);
+  const conn = config.links.find(c => c.id === selectedConnectionId);
   if (!conn) return;
 
   // Confirm deletion
@@ -1196,9 +1212,9 @@ function deleteSelectedConnection() {
     // Save state for undo
     saveStateForUndo(`Delete connection "${sourceName}" - "${targetName}"`);
 
-    const idx = config.connections.findIndex(c => c.id === selectedConnectionId);
+    const idx = config.links.findIndex(c => c.id === selectedConnectionId);
     if (idx !== -1) {
-      config.connections.splice(idx, 1);
+      config.links.splice(idx, 1);
       selectedConnectionId = null;
       saveConfig();
       renderTree(config.nodes);
@@ -1822,7 +1838,7 @@ function deleteNodeFromContext() {
         });
       }
       // Also remove connections involving this node
-      config.connections = config.connections.filter(c =>
+      config.links = config.links.filter(c =>
         c.sourceNodeId !== contextMenuNode.id && c.targetNodeId !== contextMenuNode.id
       );
       config.nodes.splice(idx, 1);
@@ -2154,8 +2170,9 @@ function openNodeModal(node = null) {
   document.getElementById('node-ssh-port').value = node && node.sshPort ? node.sshPort : 22;
   document.getElementById('node-ssh-user').value = node ? node.sshUser || '' : '';
   document.getElementById('node-ssh-pass').value = node ? node.sshPass || '' : '';
-  document.getElementById('node-link-type').value = node ? node.linkType || '' : '';
-  document.getElementById('node-link-speed').value = node ? node.linkSpeed || '' : '';
+  const cable = node ? Topology.primaryCable(config, node.id) : null;
+  document.getElementById('node-link-type').value = cable ? (cable.medium || '') : '';
+  document.getElementById('node-link-speed').value = cable ? (cable.speed || '') : '';
 
   // Container options
   document.getElementById('node-is-container').value = node && node.isContainer ? 'true' : 'false';
@@ -2212,8 +2229,8 @@ function openNodeModal(node = null) {
   secondarySelect.innerHTML = options;
 
   if (node) {
-    primarySelect.value = node.primaryParentId || '';
-    secondarySelect.value = node.secondaryParentId || '';
+    primarySelect.value = Topology.parentNodeId(config, node.id, 'primary') || '';
+    secondarySelect.value = Topology.parentNodeId(config, node.id, 'failover') || '';
   }
 
   openModal('node-modal');
@@ -2486,29 +2503,35 @@ function saveNode() {
     id: p.id.startsWith('node_') ? p.id : `${newNodeId}_${p.name.toLowerCase().replace(/\s+/g, '_')}`
   }));
 
+  const previous = id ? config.nodes.find((node) => node.id === id) : null;
   const nodeData = {
+    ...(previous || {}),
     id: newNodeId,
     name,
     address,
-    port: port ? parseInt(port) : null,
+    port: port ? parseInt(port, 10) : null,
     iconType,
     icon,
-    primaryParentId,
-    secondaryParentId,
-    sshPort: sshPort ? parseInt(sshPort) : 22,
+    sshPort: sshPort ? parseInt(sshPort, 10) : 22,
     sshUser,
     sshPass,
-    linkType,
-    linkSpeed,
     ports,
-    // Container properties
     isContainer,
     containerType: isContainer ? containerType : null,
-    zones: isContainer ? editingContainerZones : null, // VLAN zones for containers
-    containerId: isContainer ? null : containerId, // Container nodes can't be inside other containers
-    zoneId: isContainer ? null : zoneId, // Zone assignment for child nodes
-    expanded: true // Default expanded state for containers
+    zones: isContainer ? editingContainerZones : null,
+    containerId: isContainer ? null : containerId,
+    zoneId: isContainer ? null : zoneId
   };
+  delete nodeData.primaryParentId;
+  delete nodeData.secondaryParentId;
+  delete nodeData.activeParentId;
+  delete nodeData.linkType;
+  delete nodeData.linkSpeed;
+  delete nodeData.status;
+  delete nodeData.uptime;
+  delete nodeData.level;
+  delete nodeData.responseTime;
+  if (!previous) nodeData.expanded = true;
 
   // Save state for undo before making changes
   saveStateForUndo(id ? `Edit node "${name}"` : `Add node "${name}"`);
@@ -2533,6 +2556,10 @@ function saveNode() {
     nodeData.y = (row * 15) + 10;
     config.nodes.push(nodeData);
   }
+
+  Topology.setParent(config, newNodeId, 'primary', primaryParentId);
+  Topology.setParent(config, newNodeId, 'failover', secondaryParentId);
+  Topology.setCable(config, newNodeId, linkType, linkSpeed);
 
   saveConfig();
   closeModal('node-modal');
@@ -2723,18 +2750,15 @@ async function addDiscoveredNodes() {
     const col = (startCount + idx) % 10;
     const row = Math.floor((startCount + idx) / 10);
 
-    config.nodes.push({
+    config.nodes.push(Topology.createNode({
       id: 'node_' + Date.now() + '_' + idx,
       name: `Device ${host.ip}`,
       address: host.ip,
-      port: null,
-      primaryParentId: null,
-      secondaryParentId: null,
       icon: 'circle',
       iconType: 'lucide',
       x: (col * 10) + 5,
       y: (row * 15) + 10
-    });
+    }));
   });
 
   saveConfig();
@@ -2829,7 +2853,7 @@ async function exportTopologyAsImage() {
   }
 
   // Draw connections
-  (config.connections || []).forEach(conn => {
+  (config.links || []).forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;
@@ -2843,7 +2867,7 @@ async function exportTopologyAsImage() {
     const sourceData = networkData.find(n => n.id === sourceNode.id);
     const targetData = networkData.find(n => n.id === targetNode.id);
     const isOnline = sourceData?.status && targetData?.status;
-    const color = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+    const color = conn.role === 'failover' ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
 
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
@@ -2860,10 +2884,10 @@ async function exportTopologyAsImage() {
     ctx.globalAlpha = 1;
 
     // Draw link label if available
-    if (conn.linkType || conn.linkSpeed) {
+    if (conn.medium || conn.speed) {
       const labelX = midX;
       const labelY = (y1 + y2) / 2 - 10;
-      const labelText = [conn.linkType, conn.linkSpeed].filter(Boolean).join(' ');
+      const labelText = [conn.medium, conn.speed].filter(Boolean).join(' ');
 
       ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
       const textWidth = ctx.measureText(labelText).width + 10;
@@ -2957,7 +2981,7 @@ function autoLayoutNodes() {
   saveStateForUndo('Auto-layout nodes');
 
   // Build adjacency map from connections
-  const connections = config.connections || [];
+  const connections = config.links || [];
   const adjacency = new Map();
 
   config.nodes.forEach(node => {
@@ -3065,13 +3089,13 @@ function setupMonitoringListener() {
         node.name = configNode.name;
         node.address = configNode.address;
         node.port = configNode.port;
-        node.primaryParentId = configNode.primaryParentId;
-        node.secondaryParentId = configNode.secondaryParentId;
-        const primaryUp = configNode.primaryParentId ? statusById.get(configNode.primaryParentId) === true : false;
-        const secondaryUp = configNode.secondaryParentId ? statusById.get(configNode.secondaryParentId) === true : false;
+        const primaryParentId = parentIdOf(configNode.id, 'primary');
+        const secondaryParentId = parentIdOf(configNode.id, 'failover');
+        const primaryUp = primaryParentId ? statusById.get(primaryParentId) === true : false;
+        const secondaryUp = secondaryParentId ? statusById.get(secondaryParentId) === true : false;
         node.activeParentId = (!primaryUp && secondaryUp)
-          ? configNode.secondaryParentId
-          : (configNode.primaryParentId || null);
+          ? secondaryParentId
+          : (primaryParentId || null);
         node.x = configNode.x;
         node.y = configNode.y;
         node.icon = configNode.icon;
@@ -3553,7 +3577,7 @@ function saveStateForUndo(actionName = 'Change') {
     action: actionName,
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
 
   undoStack.push(state);
@@ -3580,14 +3604,14 @@ function undo() {
     action: 'Current',
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
   redoStack.push(currentState);
 
   // Restore previous state
   const previousState = undoStack.pop();
   config.nodes = previousState.nodes;
-  config.connections = previousState.connections;
+  config.links = previousState.links;
 
   // Re-render
   renderTree(config.nodes);
@@ -3610,14 +3634,14 @@ function redo() {
     action: 'Current',
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
   undoStack.push(currentState);
 
   // Restore next state
   const nextState = redoStack.pop();
   config.nodes = nextState.nodes;
-  config.connections = nextState.connections;
+  config.links = nextState.links;
 
   // Re-render
   renderTree(config.nodes);
@@ -3733,7 +3757,7 @@ function updateMinimap() {
   ctx.strokeStyle = isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.4)';
   ctx.lineWidth = 1;
 
-  config.connections.forEach(conn => {
+  config.links.forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;

@@ -703,6 +703,17 @@
     .node-container.container-rack { border-color: rgba(155, 89, 182, 0.5); }
     .node-container.container-rack .container-header { background: rgba(155, 89, 182, 0.15); }
     .node-container.container-rack .container-type-badge { background: rgba(155, 89, 182, 0.2); color: #9b59b6; }
+
+    #admin-root { display: none; }
+    #admin-root.open {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      overflow: auto;
+      background: #0b1220;
+      color: #e6eef8;
+    }
   </style>
 </head>
 <body>
@@ -1143,10 +1154,13 @@
 
 <!-- Toast Container -->
 <div id="toast-container" class="toast-container"></div>
+<div id="admin-root"></div>
 
 <script src="vendor/xterm/xterm.js"></script>
 <script src="vendor/xterm-addon-fit/xterm-addon-fit.js"></script>
+<script src="js/topology.js"></script>
 <script src="js/desktop.js"></script>
+<script src="js/admin.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

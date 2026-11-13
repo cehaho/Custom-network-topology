@@ -3,6 +3,7 @@ mod hosts;
 mod monitor;
 mod network;
 mod ssh;
+mod topology;
 
 use std::sync::Arc;
 

@@ -28,7 +28,7 @@ const KEYRING_USER: &str = "topology-key";
 
 pub fn load(app: &AppHandle) -> Value {
     let Ok(path) = resolve_config_path(app) else {
-        return empty_config();
+        return topology::empty_document();
     };
     if !path.is_file() {
         if write_atomic(&path, SAMPLE).is_err() {
@@ -42,7 +42,7 @@ pub fn load(app: &AppHandle) -> Value {
         }
         Err(error) => {
             log::warn!("config load failed: {error}");
-            empty_config()
+            topology::empty_document()
         }
     }
 }
@@ -53,7 +53,7 @@ pub fn save(app: &AppHandle, config: Value) -> Value {
         Err(error) => return failure(&error),
     };
     match prepare_for_disk(config) {
-        Ok(body) => match write_atomic(&path, &body) {
+        Ok(body) => match write_replacing(&path, &body) {
             Ok(()) => json!({ "success": true }),
             Err(error) => failure(&error),
         },
@@ -62,7 +62,7 @@ pub fn save(app: &AppHandle, config: Value) -> Value {
 }
 
 pub fn export(app: &AppHandle, config: Value) -> Value {
-    let body = match normalize(config).and_then(|value| pretty(&value)) {
+    let body = match topology::read_document(config).and_then(|value| pretty(&value)) {
         Ok(body) => body,
         Err(error) => return failure(&error),
     };
@@ -93,7 +93,19 @@ pub fn import(app: &AppHandle) -> Value {
         return json!({ "success": false, "canceled": true });
     };
     match read_config_file(&path) {
-        Ok(config) => json!({ "success": true, "config": config }),
+        Ok(config) => {
+            let nodes = config["nodes"].as_array().map(Vec::len).unwrap_or(0);
+            let links = config["links"].as_array().map(Vec::len).unwrap_or(0);
+            json!({
+                "success": true,
+                "config": config,
+                "summary": {
+                    "nodes": nodes,
+                    "links": links,
+                    "schemaVersion": config["schemaVersion"].as_i64().unwrap_or(topology::SCHEMA_VERSION)
+                }
+            })
+        }
         Err(error) => failure(&error),
     }
 }
@@ -115,7 +127,7 @@ pub fn browse_key(app: &AppHandle) -> Value {
 }
 
 fn prepare_for_disk(config: Value) -> Result<String, String> {
-    let mut normalized = normalize(config)?;
+    let mut normalized = topology::read_document(config)?;
     protect_passwords(&mut normalized, encryption_key().as_ref());
     pretty(&normalized)
 }
@@ -128,47 +140,11 @@ fn pretty(config: &Value) -> Result<String, String> {
     Ok(body)
 }
 
-pub fn normalize(value: Value) -> Result<Value, String> {
-    if let Value::Array(nodes) = value {
-        let mut config = empty_config();
-        config["nodes"] = Value::Array(nodes);
-        return Ok(config);
-    }
-    let Value::Object(map) = value else {
-        return Err("Configuration must be a JSON object or an array of nodes".to_string());
-    };
-    let settings = match map.get("settings") {
-        Some(Value::Object(_)) => map.get("settings").cloned().unwrap_or(Value::Null),
-        _ => empty_config()["settings"].clone(),
-    };
-    let nodes = match map.get("nodes") {
-        Some(Value::Array(nodes)) => Value::Array(nodes.clone()),
-        _ => Value::Array(Vec::new()),
-    };
-    let connections = match map.get("connections") {
-        Some(Value::Array(connections)) => Value::Array(connections.clone()),
-        _ => Value::Array(Vec::new()),
-    };
-    Ok(json!({
-        "settings": settings,
-        "nodes": nodes,
-        "connections": connections,
-    }))
-}
-
-fn empty_config() -> Value {
-    json!({
-        "settings": { "showGrid": true, "gridSize": 100, "snapToGrid": true },
-        "nodes": [],
-        "connections": []
-    })
-}
-
 fn parse_sample() -> Value {
     serde_json::from_str(SAMPLE)
         .ok()
-        .and_then(|value| normalize(value).ok())
-        .unwrap_or_else(empty_config)
+        .and_then(|value| topology::read_document(value).ok())
+        .unwrap_or_else(topology::empty_document)
 }
 
 fn read_config_file(path: &Path) -> Result<Value, String> {
@@ -182,7 +158,7 @@ fn read_config_file(path: &Path) -> Result<Value, String> {
         return Err("Configuration file is larger than 5 MB".to_string());
     }
     let parsed = serde_json::from_str(&body).map_err(|error| error.to_string())?;
-    normalize(parsed)
+    topology::read_document(parsed)
 }
 
 fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -251,6 +227,35 @@ fn write_private(path: &Path, body: &str) -> Result<(), String> {
     let mut file = options.open(path).map_err(|error| error.to_string())?;
     file.write_all(body.as_bytes())
         .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn write_replacing(path: &Path, body: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Configuration path has no directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    write_private(&temporary, body)?;
+    if path.is_file() {
+        let backup = path.with_file_name(format!("{file_name}.bak"));
+        if let Err(error) = std::fs::copy(path, &backup) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
+        restrict_permissions(&backup);
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    restrict_permissions(path);
     Ok(())
 }
 
@@ -400,21 +405,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_legacy_arrays_and_drops_unknown_top_level_keys() {
-        let legacy = normalize(json!([{ "id": "n1", "sshPass": "secret" }])).unwrap();
-        assert_eq!(legacy["nodes"][0]["id"], "n1");
-        assert!(legacy["connections"].as_array().unwrap().is_empty());
+    fn replacing_a_config_keeps_the_previous_file_beside_it() {
+        let directory = std::env::temp_dir().join(format!(
+            "topology-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        write_replacing(&path, "{\"schemaVersion\":1}\n").unwrap();
+        write_replacing(&path, "{\"schemaVersion\":1,\"nodes\":[]}\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"schemaVersion\":1,\"nodes\":[]}\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("config.json.bak")).unwrap(),
+            "{\"schemaVersion\":1}\n"
+        );
+        let names: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|name| !name.contains(".tmp")));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
-        let extra = normalize(json!({
-            "settings": { "showGrid": false },
-            "nodes": [],
-            "connections": [{ "id": "c1" }],
-            "unexpected": true
-        }))
-        .unwrap();
-        assert!(extra.get("unexpected").is_none());
-        assert_eq!(extra["settings"]["showGrid"], false);
-        assert_eq!(extra["connections"][0]["id"], "c1");
+    #[test]
+    fn invalid_topology_is_refused_before_replace() {
+        let error = prepare_for_disk(json!({ "settings": { "showGrid": true } })).unwrap_err();
+        assert!(error.contains("no nodes"));
     }
 
     #[test]
