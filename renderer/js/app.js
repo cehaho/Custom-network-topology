@@ -3,7 +3,8 @@
 // ============================================
 
 // State
-let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true, theme: 'dark' }, nodes: [], connections: [] };
+let config = Topology.emptyDocument();
+let adminOpen = false;
 let networkData = [];
 let terminals = new Map();
 let activeTerminal = null;
@@ -70,33 +71,25 @@ async function init() {
   if (window.electronAPI) startMonitoring();
 }
 
-function normalizeLoadedConfig(raw) {
-  if (Array.isArray(raw)) {
-    return {
-      settings: { showGrid: true, gridSize: 100, snapToGrid: true },
-      nodes: raw,
-      connections: []
-    };
-  }
-  const source = raw && typeof raw === 'object' ? raw : {};
-  return {
-    settings: { showGrid: true, gridSize: 100, snapToGrid: true, ...(source.settings || {}) },
-    nodes: Array.isArray(source.nodes) ? source.nodes : [],
-    connections: Array.isArray(source.connections) ? source.connections : []
-  };
-}
-
 async function loadConfig() {
   try {
+    let raw = null;
     if (window.electronAPI) {
-      config = normalizeLoadedConfig(await window.electronAPI.config.load());
+      raw = await window.electronAPI.config.load();
     } else {
       const res = await fetch('config.json');
-      if (res.ok) config = normalizeLoadedConfig(await res.json());
+      if (res.ok) raw = await res.json();
     }
+    if (raw === null) return;
 
-    // Migrate legacy data and ensure ports exist
-    migrateAndInitializePorts();
+    const loaded = Topology.read(raw);
+    if (!loaded.ok) {
+      console.error(loaded.error);
+      toastError('Topology refused', loaded.error);
+      return;
+    }
+    config = loaded.document;
+    if (loaded.changed && window.electronAPI) await saveConfig();
 
     updateSnapButton();
     renderTree(config.nodes);
@@ -106,98 +99,118 @@ async function loadConfig() {
   }
 }
 
-// Migrate old primaryParentId/secondaryParentId to connections and ensure ports
-function migrateAndInitializePorts() {
-  let needsSave = false;
-
-  config.nodes.forEach(node => {
-    // Ensure node has ports array
-    if (!node.ports || node.ports.length === 0) {
-      node.ports = [
-        { id: `${node.id}_in`, name: 'IN', side: 'top' },
-        { id: `${node.id}_out`, name: 'OUT', side: 'bottom' }
-      ];
-      needsSave = true;
-    }
-
-    // Migrate legacy primaryParentId to connection
-    if (node.primaryParentId) {
-      const parentNode = config.nodes.find(n => n.id === node.primaryParentId);
-      if (parentNode) {
-        // Ensure parent has ports
-        if (!parentNode.ports || parentNode.ports.length === 0) {
-          parentNode.ports = [
-            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
-            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
-          ];
-        }
-
-        // Check if connection already exists
-        const existingConn = config.connections.find(c =>
-          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id
-        );
-
-        if (!existingConn) {
-          config.connections.push({
-            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            sourceNodeId: parentNode.id,
-            sourcePortId: `${parentNode.id}_out`,
-            targetNodeId: node.id,
-            targetPortId: `${node.id}_in`,
-            linkType: node.linkType || null,
-            linkSpeed: node.linkSpeed || null,
-            isFailover: false
-          });
-          needsSave = true;
-        }
-      }
-    }
-
-    // Migrate legacy secondaryParentId to failover connection
-    if (node.secondaryParentId) {
-      const parentNode = config.nodes.find(n => n.id === node.secondaryParentId);
-      if (parentNode) {
-        if (!parentNode.ports || parentNode.ports.length === 0) {
-          parentNode.ports = [
-            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
-            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
-          ];
-        }
-
-        const existingConn = config.connections.find(c =>
-          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id && c.isFailover
-        );
-
-        if (!existingConn) {
-          config.connections.push({
-            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            sourceNodeId: parentNode.id,
-            sourcePortId: `${parentNode.id}_out`,
-            targetNodeId: node.id,
-            targetPortId: `${node.id}_in`,
-            linkType: null,
-            linkSpeed: null,
-            isFailover: true
-          });
-          needsSave = true;
-        }
-      }
-    }
-  });
-
-  if (needsSave) {
-    saveConfig();
+async function saveConfig() {
+  const prepared = Topology.prepare(config);
+  if (!prepared.ok) {
+    console.error(prepared.error);
+    return { success: false, error: prepared.error };
+  }
+  config = prepared.document;
+  try {
+    if (window.electronAPI) return await window.electronAPI.config.save(config);
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to save config:', error);
+    return { success: false, error: error && error.message ? error.message : 'Save failed' };
   }
 }
 
-async function saveConfig() {
-  try {
-    if (window.electronAPI) {
-      await window.electronAPI.config.save(config);
-    }
-  } catch (error) {
-    console.error('Failed to save config:', error);
+async function importTopologyInteractive() {
+  if (!window.electronAPI) return null;
+  const result = await window.electronAPI.config.import();
+  if (!result || result.canceled) return null;
+  if (!result.success || !result.config) {
+    toastError('Import refused', (result && result.error) || 'Import failed');
+    return null;
   }
+  const loaded = Topology.read(result.config);
+  if (!loaded.ok) {
+    toastError('Import refused', loaded.error);
+    return null;
+  }
+  if (!window.confirm(Topology.importMessage(loaded.document))) return null;
+  return loaded.document;
+}
+
+async function applyImportedTopology(document) {
+  config = document;
+  const saved = await saveConfig();
+  if (saved && saved.success === false) {
+    toastError('Import refused', saved.error);
+    return false;
+  }
+  updateSnapButton();
+  if (monitoringActive) {
+    await stopMonitoring();
+    await startMonitoring();
+  } else {
+    renderTree(config.nodes);
+    renderHostList(config.nodes);
+  }
+  const counts = Topology.summary(config);
+  toastSuccess('Configuration imported', `${counts.nodes} nodes, ${counts.links} links`);
+  return true;
+}
+
+function parentIdOf(nodeId, role) {
+  return Topology.parentNodeId(config, nodeId, role);
+}
+
+function openAdminPanel() {
+  adminOpen = true;
+  Admin.open({
+    embedded: true,
+    getDocument: () => config,
+    replaceDocument: (document) => {
+      config = document;
+    },
+    persist: async () => {
+      const result = await saveConfig();
+      if (monitoringActive && (!result || result.success !== false)) {
+        await stopMonitoring();
+        await startMonitoring();
+      }
+      return result || { success: true };
+    },
+    onClose: () => {
+      adminOpen = false;
+      if (monitoringActive && networkData.length) {
+        const known = new Set(config.nodes.map((node) => node.id));
+        networkData = networkData.filter((node) => known.has(node.id));
+        networkData.forEach((node) => {
+          const configNode = config.nodes.find((candidate) => candidate.id === node.id);
+          if (!configNode) return;
+          node.name = configNode.name;
+          node.address = configNode.address;
+          node.port = configNode.port;
+          node.icon = configNode.icon;
+          node.iconType = configNode.iconType;
+          node.ports = configNode.ports;
+          node.isContainer = configNode.isContainer;
+          node.containerType = configNode.containerType;
+          node.containerId = configNode.containerId;
+          node.zoneId = configNode.zoneId;
+          node.zones = configNode.zones;
+          node.expanded = configNode.expanded;
+          node.x = configNode.x;
+          node.y = configNode.y;
+        });
+        config.nodes.forEach((node) => {
+          if (!networkData.some((candidate) => candidate.id === node.id)) {
+            networkData.push(JSON.parse(JSON.stringify(node)));
+          }
+        });
+        renderTree(networkData);
+        renderHostList(networkData);
+      } else {
+        renderTree(config.nodes);
+        renderHostList(config.nodes);
+      }
+      updateSnapButton();
+      updateMinimap();
+    },
+    importDocument: importTopologyInteractive
+  });
 }
 
 // ============================================
@@ -328,6 +341,7 @@ function setupEventListeners() {
 
   // Context menu
   document.addEventListener('click', (e) => {
+    if (adminOpen) return;
     hideContextMenu();
     // Deselect connection when clicking outside of connections
     if (!e.target.closest('.connection-group') && !e.target.closest('.node-container')) {
@@ -342,6 +356,13 @@ function setupEventListeners() {
 
   // Keyboard events - consolidated handler
   document.addEventListener('keydown', (e) => {
+    if (adminOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        Admin.requestClose();
+      }
+      return;
+    }
     // Check if user is typing in an input field or inside a modal
     const isInModal = e.target.closest('.modal') || e.target.closest('.modal-overlay');
     const isTyping = e.target.tagName === 'INPUT' ||
@@ -386,34 +407,25 @@ function setupEventListeners() {
 
   // Toolbar buttons
   document.getElementById('btn-admin').addEventListener('click', () => {
-    window.location.href = 'admin.html';
+    openAdminPanel();
   });
 
   document.getElementById('btn-discover').addEventListener('click', openDiscoveryModal);
   document.getElementById('btn-snap').addEventListener('click', toggleSnapToGrid);
 
   document.getElementById('btn-import').addEventListener('click', async () => {
-    if (!window.electronAPI) return;
-    const result = await window.electronAPI.config.import();
-    if (!result.success || !result.config) return;
-
-    config = normalizeLoadedConfig(result.config);
-    migrateAndInitializePorts();
-    updateSnapButton();
-    if (monitoringActive) {
-      await stopMonitoring();
-      await startMonitoring();
-    } else {
-      renderTree(config.nodes);
-      renderHostList(config.nodes);
-    }
-    toastSuccess('Configuration imported', `${config.nodes.length} nodes loaded`);
+    const imported = await importTopologyInteractive();
+    if (imported) await applyImportedTopology(imported);
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
-    if (window.electronAPI) {
-      await window.electronAPI.config.export(config);
+    if (!window.electronAPI) return;
+    const prepared = Topology.prepare(config);
+    if (!prepared.ok) {
+      toastError('Export refused', prepared.error);
+      return;
     }
+    await window.electronAPI.config.export(prepared.document);
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
@@ -465,23 +477,86 @@ function updateTransform() {
 // Node Rendering
 // ============================================
 
+function displayedNodes() {
+  return monitoringActive && networkData.length ? networkData : config.nodes;
+}
+
+function statusView(status) {
+  const state = Probe.canonicalStatus(status);
+  if (state === 'up') {
+    return {
+      state: state,
+      label: 'ONLINE',
+      short: 'ON',
+      className: 'online',
+      color: '#16a34a',
+      background: 'rgba(34,197,94,0.06)',
+      dot: 'bg-green-500',
+      text: 'text-green-400'
+    };
+  }
+  if (state === 'down') {
+    return {
+      state: state,
+      label: 'OFFLINE',
+      short: 'OFF',
+      className: 'offline',
+      color: '#ef4444',
+      background: 'rgba(239,68,68,0.06)',
+      dot: 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]',
+      text: 'text-red-400 font-bold'
+    };
+  }
+  return {
+    state: state,
+    label: 'UNKNOWN',
+    short: '…',
+    className: 'unknown',
+    color: '#94a3b8',
+    background: 'rgba(148,163,184,0.08)',
+    dot: 'bg-slate-400',
+    text: 'text-slate-400'
+  };
+}
+
+function statusLabel(node, statusById, view) {
+  const active = Probe.activeLink(config.links, node.id, statusById);
+  if (active && active.role === 'failover') return view.label + ' · FAILOVER';
+  return view.label;
+}
+
+function linkAppearance(conn, nodes) {
+  const statusById = new Map((nodes || []).map((node) => [node.id, node.status]));
+  const active = Probe.activeLink(config.links, conn.targetNodeId, statusById);
+  const isActive = Boolean(active && active.id === conn.id);
+  return Probe.linkLook(
+    conn.role,
+    isActive,
+    statusById.get(conn.sourceNodeId),
+    statusById.get(conn.targetNodeId)
+  );
+}
+
 function renderTree(nodes) {
   const container = document.getElementById('tree-container');
   container.innerHTML = '';
 
   const nodeMap = {};
+  const primaryById = {};
+  const statusById = new Map();
   nodes.forEach(n => {
-    n.primaryParentId = (n.primaryParentId && n.primaryParentId !== '') ? n.primaryParentId : null;
-    n.activeParentId = (n.activeParentId && n.activeParentId !== '') ? n.activeParentId : n.primaryParentId;
+    primaryById[n.id] = parentIdOf(n.id, 'primary');
     n.level = 0;
     nodeMap[n.id] = n;
+    statusById.set(n.id, n.status);
   });
 
-  // Calculate levels
+  // Calculate levels from primary links. The parent id is not stored on the node.
   for (let i = 0; i < 6; i++) {
     nodes.forEach(n => {
-      if (n.primaryParentId && nodeMap[n.primaryParentId]) {
-        n.level = Math.max(n.level, nodeMap[n.primaryParentId].level + 1);
+      const parentId = primaryById[n.id];
+      if (parentId && nodeMap[parentId]) {
+        n.level = Math.max(n.level, nodeMap[parentId].level + 1);
       }
     });
   }
@@ -509,7 +584,7 @@ function renderTree(nodes) {
     Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
       const count = sidePorts.length;
       sidePorts.forEach((port, idx) => {
-        const isConnected = config.connections.some(c =>
+        const isConnected = config.links.some(c =>
           (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
           (c.targetNodeId === node.id && c.targetPortId === port.id)
         );
@@ -595,7 +670,7 @@ function renderTree(nodes) {
     el.style.top = topPos;
     el.style.pointerEvents = 'auto';
 
-    const isUp = node.status === true;
+    const view = statusView(node.status);
     const iconHtml = generateIconHtml(node);
     const portsHtml = generatePortsHtml(node);
 
@@ -612,7 +687,7 @@ function renderTree(nodes) {
 
     // Helper function to generate child node HTML
     function generateChildHtml(child, idx) {
-      const childIsUp = child.status === true;
+      const childView = statusView(child.status);
       const childIconHtml = generateIconHtml(child);
       return `
         <div class="child-node" data-node-id="${child.id}" data-child-index="${idx}">
@@ -623,8 +698,8 @@ function renderTree(nodes) {
             <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
             <div class="child-node-address">${escapeHtml(child.address || '')}</div>
           </div>
-          <div class="child-node-status ${childIsUp ? 'online' : 'offline'}">
-            ${childIsUp ? 'ON' : 'OFF'}
+          <div class="child-node-status ${childView.className}">
+            ${childView.short}
           </div>
         </div>
       `;
@@ -710,8 +785,8 @@ function renderTree(nodes) {
         </div>
         <div class="container-header-right">
           <span class="container-count">${children.length} node${children.length !== 1 ? 's' : ''}</span>
-          <div class="container-status ${isUp ? 'online' : 'offline'}">
-            ${isUp ? 'ONLINE' : 'OFFLINE'}
+          <div class="container-status ${view.className}">
+            ${statusLabel(node, statusById, view)}
           </div>
         </div>
       </div>
@@ -792,8 +867,7 @@ function renderTree(nodes) {
     el.style.height = '140px';
     el.style.pointerEvents = 'auto';
 
-    const isUp = node.status === true;
-    const isFailover = node.activeParentId === node.secondaryParentId && node.secondaryParentId !== null;
+    const view = statusView(node.status);
     const iconHtml = generateIconHtml(node);
     const gridCell = getGridCell(node.x || 50, node.y || 50);
     const portsHtml = generatePortsHtml(node);
@@ -808,8 +882,8 @@ function renderTree(nodes) {
           <div style="font-weight:700; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(node.name || node.id)}</div>
           <div style="font-size:11px; color:var(--muted); font-family:monospace;">${escapeHtml(node.address || '')}</div>
           <div style="font-size:9px; color:#475569; font-family:monospace;">${gridCell.col}${gridCell.row}</div>
-          <div style="margin-top:6px; font-size:10px; padding:4px 6px; border-radius:999px; display:inline-block; color:${isFailover ? '#b45309' : (isUp ? '#16a34a' : '#ef4444')}; background:${isFailover ? 'rgba(251,191,36,0.08)' : (isUp ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)')}; border:1px solid rgba(255,255,255,0.02); font-weight:700; letter-spacing:0.6px;">
-            ${isUp ? 'ONLINE' : 'OFFLINE'}${isFailover ? ' (FAILOVER)' : ''}
+          <div style="margin-top:6px; font-size:10px; padding:4px 6px; border-radius:999px; display:inline-block; color:${view.color}; background:${view.background}; border:1px solid rgba(255,255,255,0.02); font-weight:700; letter-spacing:0.6px;">
+            ${statusLabel(node, statusById, view)}
           </div>
         </div>
       </div>
@@ -843,8 +917,8 @@ function drawLines() {
   svg.setAttribute('height', '300%');
   svg.innerHTML = '';
 
-  // Draw connections from config.connections array
-  config.connections.forEach(conn => {
+  // Draw connections from config.links array
+  config.links.forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;
@@ -869,11 +943,8 @@ function drawLines() {
     // Create bezier curve path
     const d = createBezierPath(x1, y1, x2, y2, sourcePort?.side || 'bottom', targetPort?.side || 'top');
 
-    // Determine connection status and color
-    const sourceData = networkData.find(n => n.id === conn.sourceNodeId);
-    const targetData = networkData.find(n => n.id === conn.targetNodeId);
-    const isOnline = sourceData?.status && targetData?.status;
-    const baseColor = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+    const look = linkAppearance(conn, displayedNodes());
+    const baseColor = look.color;
 
     // Create group for this connection
     const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -895,12 +966,13 @@ function drawLines() {
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', baseColor);
     path.setAttribute('stroke-width', '2');
-    path.setAttribute('stroke-opacity', '0.4');
+    path.setAttribute('stroke-opacity', look.waiting ? '0.28' : '0.45');
+    if (look.waiting) path.setAttribute('stroke-dasharray', '2 7');
     path.classList.add('connection-main');
     group.appendChild(path);
 
-    // Animated paths for active connections
-    if (isOnline || conn.isFailover) {
+    // Only the active link, and only while both ends answer, moves.
+    if (look.animate) {
       const pathFwd = document.createElementNS("http://www.w3.org/2000/svg", "path");
       pathFwd.setAttribute('d', d);
       pathFwd.setAttribute('fill', 'none');
@@ -933,13 +1005,13 @@ function drawLines() {
     svg.appendChild(group);
 
     // Draw link speed/type label if available
-    if (conn.linkType || conn.linkSpeed) {
+    if (conn.medium || conn.speed) {
       const midX = (x1 + x2) / 2;
       const midY = (y1 + y2) / 2;
 
       let labelParts = [];
-      if (conn.linkType) labelParts.push(conn.linkType);
-      if (conn.linkSpeed) labelParts.push(conn.linkSpeed);
+      if (conn.medium) labelParts.push(conn.medium);
+      if (conn.speed) labelParts.push(conn.speed);
       const labelText = labelParts.join(' ');
 
       const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -1122,7 +1194,7 @@ function endConnection(e) {
     // Don't connect to same node
     if (targetNodeId !== connectionStart.nodeId) {
       // Check if connection already exists
-      const existingConn = config.connections.find(c =>
+      const existingConn = config.links.find(c =>
         (c.sourceNodeId === connectionStart.nodeId && c.sourcePortId === connectionStart.portId &&
          c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) ||
         (c.sourceNodeId === targetNodeId && c.sourcePortId === targetPortId &&
@@ -1136,15 +1208,15 @@ function endConnection(e) {
         saveStateForUndo(`Connect "${sourceNode?.name || connectionStart.nodeId}" to "${targetNode?.name || targetNodeId}"`);
 
         // Create new connection
-        config.connections.push({
+        config.links.push({
           id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           sourceNodeId: connectionStart.nodeId,
           sourcePortId: connectionStart.portId,
           targetNodeId: targetNodeId,
           targetPortId: targetPortId,
-          linkType: null,
-          linkSpeed: null,
-          isFailover: false
+          role: 'primary',
+          medium: null,
+          speed: null
         });
 
         saveConfig();
@@ -1183,7 +1255,7 @@ function deselectConnection() {
 function deleteSelectedConnection() {
   if (!selectedConnectionId) return;
 
-  const conn = config.connections.find(c => c.id === selectedConnectionId);
+  const conn = config.links.find(c => c.id === selectedConnectionId);
   if (!conn) return;
 
   // Confirm deletion
@@ -1196,9 +1268,9 @@ function deleteSelectedConnection() {
     // Save state for undo
     saveStateForUndo(`Delete connection "${sourceName}" - "${targetName}"`);
 
-    const idx = config.connections.findIndex(c => c.id === selectedConnectionId);
+    const idx = config.links.findIndex(c => c.id === selectedConnectionId);
     if (idx !== -1) {
-      config.connections.splice(idx, 1);
+      config.links.splice(idx, 1);
       selectedConnectionId = null;
       saveConfig();
       renderTree(config.nodes);
@@ -1544,17 +1616,21 @@ function renderHostList(nodes) {
   const list = document.getElementById('host-list-content');
   document.getElementById('host-count').innerText = nodes.length;
 
+  const rank = { down: 0, unknown: 1, up: 2 };
   const sortedNodes = [...nodes].sort((a, b) => {
-    if (a.status === b.status) return (a.name || '').localeCompare(b.name || '');
-    return a.status ? 1 : -1;
+    const left = rank[Probe.canonicalStatus(a.status)];
+    const right = rank[Probe.canonicalStatus(b.status)];
+    if (left === right) return (a.name || '').localeCompare(b.name || '');
+    return left - right;
   });
 
   let html = '';
   sortedNodes.forEach(node => {
-    const colorClass = node.status ? 'bg-green-500' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]';
-    const uptimeText = node.uptime || 'checking...';
-    const statusLabel = node.status ? 'UP' : 'DOWN';
-    const statusColor = node.status ? 'text-green-400' : 'text-red-400 font-bold';
+    const view = statusView(node.status);
+    const colorClass = view.dot;
+    const uptimeText = node.uptime || '—';
+    const listLabel = view.state === 'up' ? 'UP' : view.state === 'down' ? 'DOWN' : 'UNKNOWN';
+    const statusColor = view.text;
 
     html += `
       <div class="host-row" data-node-id="${node.id}">
@@ -1566,7 +1642,7 @@ function renderHostList(nodes) {
           </div>
         </div>
         <div class="text-right">
-          <div class="text-[10px] ${statusColor}">${statusLabel}</div>
+          <div class="text-[10px] ${statusColor}">${listLabel}</div>
           <div class="status-text">${uptimeText}</div>
         </div>
       </div>
@@ -1599,10 +1675,13 @@ function applyNodeFilter() {
 
     // Status filter
     let matchesStatus = true;
+    const state = Probe.canonicalStatus(node.status);
     if (statusFilter === 'online') {
-      matchesStatus = node.status === true;
+      matchesStatus = state === 'up';
     } else if (statusFilter === 'offline') {
-      matchesStatus = node.status === false || node.status === undefined;
+      matchesStatus = state === 'down';
+    } else if (statusFilter === 'unknown') {
+      matchesStatus = state === 'unknown';
     }
 
     return matchesSearch && matchesStatus;
@@ -1781,22 +1860,21 @@ function showStatusHistoryFromContext() {
 
   const history = statusHistory.get(contextMenuNode.id);
   const nodeName = contextMenuNode.name || contextMenuNode.id;
+  const samples = history && Array.isArray(history.history) ? history.history : [];
 
-  if (!history || history.history.length === 0) {
+  if (samples.length === 0) {
     toastInfo('Status History', `No history available for "${nodeName}". Start monitoring to track status.`);
     return;
   }
 
-  // Build history message
-  const lastChange = getLastStatusChange(contextMenuNode.id);
-  let message = `Current: ${lastChange.status ? 'Online' : 'Offline'} for ${lastChange.duration}\n\n`;
-  message += 'Recent changes:\n';
+  const current = historyLabel(history.lastStatus);
+  const held = history.lastChange ? ` for ${formatDuration(Date.now() - history.lastChange)}` : '';
+  let message = `Current: ${current}${held}\n\n`;
+  message += 'Recent samples:\n';
 
-  const recent = history.history.slice(-5).reverse();
-  recent.forEach(entry => {
-    const time = new Date(entry.time).toLocaleString();
-    const status = entry.status ? '🟢 Online' : '🔴 Offline';
-    message += `• ${time}: ${status}\n`;
+  samples.slice(-5).reverse().forEach((entry) => {
+    const delay = entry.responseTime == null ? '' : ` (${entry.responseTime} ms)`;
+    message += `• ${historyWhen(entry)}: ${historyLabel(entry.status)}${delay}\n`;
   });
 
   // Show as alert for now (could be improved with a modal)
@@ -1822,7 +1900,7 @@ function deleteNodeFromContext() {
         });
       }
       // Also remove connections involving this node
-      config.connections = config.connections.filter(c =>
+      config.links = config.links.filter(c =>
         c.sourceNodeId !== contextMenuNode.id && c.targetNodeId !== contextMenuNode.id
       );
       config.nodes.splice(idx, 1);
@@ -2154,8 +2232,9 @@ function openNodeModal(node = null) {
   document.getElementById('node-ssh-port').value = node && node.sshPort ? node.sshPort : 22;
   document.getElementById('node-ssh-user').value = node ? node.sshUser || '' : '';
   document.getElementById('node-ssh-pass').value = node ? node.sshPass || '' : '';
-  document.getElementById('node-link-type').value = node ? node.linkType || '' : '';
-  document.getElementById('node-link-speed').value = node ? node.linkSpeed || '' : '';
+  const cable = node ? Topology.primaryCable(config, node.id) : null;
+  document.getElementById('node-link-type').value = cable ? (cable.medium || '') : '';
+  document.getElementById('node-link-speed').value = cable ? (cable.speed || '') : '';
 
   // Container options
   document.getElementById('node-is-container').value = node && node.isContainer ? 'true' : 'false';
@@ -2212,8 +2291,8 @@ function openNodeModal(node = null) {
   secondarySelect.innerHTML = options;
 
   if (node) {
-    primarySelect.value = node.primaryParentId || '';
-    secondarySelect.value = node.secondaryParentId || '';
+    primarySelect.value = Topology.parentNodeId(config, node.id, 'primary') || '';
+    secondarySelect.value = Topology.parentNodeId(config, node.id, 'failover') || '';
   }
 
   openModal('node-modal');
@@ -2486,29 +2565,35 @@ function saveNode() {
     id: p.id.startsWith('node_') ? p.id : `${newNodeId}_${p.name.toLowerCase().replace(/\s+/g, '_')}`
   }));
 
+  const previous = id ? config.nodes.find((node) => node.id === id) : null;
   const nodeData = {
+    ...(previous || {}),
     id: newNodeId,
     name,
     address,
-    port: port ? parseInt(port) : null,
+    port: port ? parseInt(port, 10) : null,
     iconType,
     icon,
-    primaryParentId,
-    secondaryParentId,
-    sshPort: sshPort ? parseInt(sshPort) : 22,
+    sshPort: sshPort ? parseInt(sshPort, 10) : 22,
     sshUser,
     sshPass,
-    linkType,
-    linkSpeed,
     ports,
-    // Container properties
     isContainer,
     containerType: isContainer ? containerType : null,
-    zones: isContainer ? editingContainerZones : null, // VLAN zones for containers
-    containerId: isContainer ? null : containerId, // Container nodes can't be inside other containers
-    zoneId: isContainer ? null : zoneId, // Zone assignment for child nodes
-    expanded: true // Default expanded state for containers
+    zones: isContainer ? editingContainerZones : null,
+    containerId: isContainer ? null : containerId,
+    zoneId: isContainer ? null : zoneId
   };
+  delete nodeData.primaryParentId;
+  delete nodeData.secondaryParentId;
+  delete nodeData.activeParentId;
+  delete nodeData.linkType;
+  delete nodeData.linkSpeed;
+  delete nodeData.status;
+  delete nodeData.uptime;
+  delete nodeData.level;
+  delete nodeData.responseTime;
+  if (!previous) nodeData.expanded = true;
 
   // Save state for undo before making changes
   saveStateForUndo(id ? `Edit node "${name}"` : `Add node "${name}"`);
@@ -2533,6 +2618,10 @@ function saveNode() {
     nodeData.y = (row * 15) + 10;
     config.nodes.push(nodeData);
   }
+
+  Topology.setParent(config, newNodeId, 'primary', primaryParentId);
+  Topology.setParent(config, newNodeId, 'failover', secondaryParentId);
+  Topology.setCable(config, newNodeId, linkType, linkSpeed);
 
   saveConfig();
   closeModal('node-modal');
@@ -2723,18 +2812,15 @@ async function addDiscoveredNodes() {
     const col = (startCount + idx) % 10;
     const row = Math.floor((startCount + idx) / 10);
 
-    config.nodes.push({
+    config.nodes.push(Topology.createNode({
       id: 'node_' + Date.now() + '_' + idx,
       name: `Device ${host.ip}`,
       address: host.ip,
-      port: null,
-      primaryParentId: null,
-      secondaryParentId: null,
       icon: 'circle',
       iconType: 'lucide',
       x: (col * 10) + 5,
       y: (row * 15) + 10
-    });
+    }));
   });
 
   saveConfig();
@@ -2829,7 +2915,7 @@ async function exportTopologyAsImage() {
   }
 
   // Draw connections
-  (config.connections || []).forEach(conn => {
+  (config.links || []).forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;
@@ -2840,14 +2926,12 @@ async function exportTopologyAsImage() {
     const y2 = (targetNode.y / 100) * 10000 - minY + padding;
 
     // Get status for color
-    const sourceData = networkData.find(n => n.id === sourceNode.id);
-    const targetData = networkData.find(n => n.id === targetNode.id);
-    const isOnline = sourceData?.status && targetData?.status;
-    const color = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+    const look = linkAppearance(conn, displayedNodes());
+    const color = look.color;
 
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.6;
+    ctx.globalAlpha = look.waiting ? 0.35 : 0.75;
 
     // Draw bezier curve
     ctx.beginPath();
@@ -2860,10 +2944,10 @@ async function exportTopologyAsImage() {
     ctx.globalAlpha = 1;
 
     // Draw link label if available
-    if (conn.linkType || conn.linkSpeed) {
+    if (conn.medium || conn.speed) {
       const labelX = midX;
       const labelY = (y1 + y2) / 2 - 10;
-      const labelText = [conn.linkType, conn.linkSpeed].filter(Boolean).join(' ');
+      const labelText = [conn.medium, conn.speed].filter(Boolean).join(' ');
 
       ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
       const textWidth = ctx.measureText(labelText).width + 10;
@@ -2882,8 +2966,8 @@ async function exportTopologyAsImage() {
     const y = (node.y / 100) * 10000 - minY + padding;
 
     // Get status
-    const nodeData = networkData.find(n => n.id === node.id);
-    const isOnline = nodeData?.status;
+    const nodeData = networkData.find(n => n.id === node.id) || node;
+    const view = statusView(nodeData.status);
 
     // Node background
     const gradient = ctx.createLinearGradient(x - 50, y - 50, x + 50, y + 50);
@@ -2907,12 +2991,16 @@ async function exportTopologyAsImage() {
     ctx.fill();
 
     // Border
-    ctx.strokeStyle = isOnline ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)';
+    ctx.strokeStyle = view.state === 'up'
+      ? 'rgba(34, 197, 94, 0.5)'
+      : view.state === 'down'
+        ? 'rgba(239, 68, 68, 0.5)'
+        : 'rgba(148, 163, 184, 0.45)';
     ctx.lineWidth = 2;
     ctx.stroke();
 
     // Status indicator
-    ctx.fillStyle = isOnline ? '#22c55e' : '#ef4444';
+    ctx.fillStyle = view.state === 'up' ? '#22c55e' : view.state === 'down' ? '#ef4444' : '#94a3b8';
     ctx.beginPath();
     ctx.arc(x + 40, y - 40, 6, 0, Math.PI * 2);
     ctx.fill();
@@ -2957,7 +3045,7 @@ function autoLayoutNodes() {
   saveStateForUndo('Auto-layout nodes');
 
   // Build adjacency map from connections
-  const connections = config.connections || [];
+  const connections = config.links || [];
   const adjacency = new Map();
 
   config.nodes.forEach(node => {
@@ -3053,69 +3141,30 @@ function setupMonitoringListener() {
   if (!window.electronAPI) return;
 
   window.electronAPI.monitor.onStatus((data) => {
-    document.getElementById('last-updated').textContent = 'Last Update: ' + data.updated;
-    const statusById = new Map((data.nodes || []).map((node) => [node.id, node.status === true]));
+    if (!data || !Array.isArray(data.nodes)) return;
+    const updated = document.getElementById('last-updated');
+    if (updated) updated.textContent = 'Last Update: ' + (data.updated || '');
+    const reported = new Map(data.nodes.map((node) => [node.id, node]));
+    const now = Date.now();
 
-    // Merge monitoring data with current config positions
-    // This preserves user-moved positions while updating status
-    const mergedNodes = data.nodes.map(node => {
-      const configNode = config.nodes.find(n => n.id === node.id);
-      if (configNode) {
-        // Use ALL properties from config (user may have edited the node)
-        node.name = configNode.name;
-        node.address = configNode.address;
-        node.port = configNode.port;
-        node.primaryParentId = configNode.primaryParentId;
-        node.secondaryParentId = configNode.secondaryParentId;
-        const primaryUp = configNode.primaryParentId ? statusById.get(configNode.primaryParentId) === true : false;
-        const secondaryUp = configNode.secondaryParentId ? statusById.get(configNode.secondaryParentId) === true : false;
-        node.activeParentId = (!primaryUp && secondaryUp)
-          ? configNode.secondaryParentId
-          : (configNode.primaryParentId || null);
-        node.x = configNode.x;
-        node.y = configNode.y;
-        node.icon = configNode.icon;
-        node.iconType = configNode.iconType;
-        node.sshPort = configNode.sshPort;
-        node.sshUser = configNode.sshUser;
-        node.sshPass = configNode.sshPass;
-        node.linkType = configNode.linkType;
-        node.linkSpeed = configNode.linkSpeed;
-        node.ports = configNode.ports;
-        // Container properties - IMPORTANT for nested nodes
-        node.isContainer = configNode.isContainer;
-        node.containerType = configNode.containerType;
-        node.containerId = configNode.containerId;
-        node.zoneId = configNode.zoneId;
-        node.zones = configNode.zones;
-        node.expanded = configNode.expanded;
+    networkData = config.nodes.map((configNode) => {
+      const entry = reported.get(configNode.id);
+      const copy = Object.assign({}, configNode);
+      copy.status = entry ? entry.status : 'unknown';
+      copy.responseTime = entry && entry.responseTime != null ? entry.responseTime : null;
+      delete copy.activeParentId;
+
+      const state = Probe.canonicalStatus(copy.status);
+      const tracker = uptimeTrackers.get(copy.id);
+      if (!tracker || tracker.status !== state) {
+        uptimeTrackers.set(copy.id, { status: state, since: now });
       }
-
-      // Update uptime tracking
-      const tracker = uptimeTrackers.get(node.id);
-      const currentStatus = node.status;
-
-      if (!tracker) {
-        uptimeTrackers.set(node.id, {
-          status: currentStatus,
-          since: Date.now()
-        });
-      } else if (tracker.status !== currentStatus) {
-        tracker.status = currentStatus;
-        tracker.since = Date.now();
-      }
-
-      // Calculate uptime string
-      const elapsed = Date.now() - (uptimeTrackers.get(node.id)?.since || Date.now());
-      node.uptime = formatDuration(elapsed);
-
-      // Track status history
-      trackStatusChange(node.id, node.name, currentStatus);
-
-      return node;
+      const since = uptimeTrackers.get(copy.id).since;
+      copy.uptime = state === 'unknown' ? 'confirming' : formatDuration(now - since);
+      rememberStatus(copy.id, copy.name, state, entry && entry.history, now);
+      return copy;
     });
 
-    networkData = mergedNodes;
     renderTree(networkData);
     renderHostList(networkData);
   });
@@ -3124,9 +3173,15 @@ function setupMonitoringListener() {
 async function startMonitoring() {
   if (!window.electronAPI || monitoringActive) return;
 
+  const settings = config.settings || {};
   await window.electronAPI.monitor.start({
-    nodes: config.nodes,
-    interval: 2000
+    nodes: (config.nodes || []).map((node) => ({
+      id: node.id,
+      address: typeof node.address === 'string' ? node.address : '',
+      port: node.port == null || node.port === '' ? null : node.port
+    })),
+    interval: Probe.monitoringInterval(settings.probeIntervalMs),
+    confirmations: Probe.confirmationCount(settings.confirmations)
   });
 
   monitoringActive = true;
@@ -3164,55 +3219,37 @@ function formatDuration(ms) {
 // Status History Tracking
 // ============================================
 
-function trackStatusChange(nodeId, nodeName, newStatus) {
-  // Normalize status to boolean to avoid undefined/null comparison issues
-  const normalizedStatus = newStatus === true;
-  const now = Date.now();
-  let nodeHistory = statusHistory.get(nodeId);
-
-  if (!nodeHistory) {
-    // First time seeing this node - don't show notification
-    nodeHistory = {
-      lastStatus: normalizedStatus,
-      lastChange: now,
-      history: [{ status: normalizedStatus, time: now }]
-    };
-    statusHistory.set(nodeId, nodeHistory);
-    return;
+function rememberStatus(nodeId, nodeName, state, history, now) {
+  const previous = statusHistory.get(nodeId);
+  let lastToast = previous ? previous.lastToast : 0;
+  if (Probe.shouldToast(previous && previous.lastStatus, state, now, lastToast, Probe.TOAST_QUIET_MS)) {
+    const name = nodeName || nodeId;
+    if (state === 'up') toastSuccess('Node Online', `"${name}" is now online`);
+    else toastError('Node Offline', `"${name}" went offline`);
+    lastToast = now;
   }
-
-  // Check if status actually changed (both must be boolean now)
-  if (nodeHistory.lastStatus !== normalizedStatus) {
-    // Status changed! Record it
-    nodeHistory.history.push({ status: normalizedStatus, time: now });
-
-    // Keep only last N entries
-    if (nodeHistory.history.length > MAX_HISTORY_ENTRIES) {
-      nodeHistory.history = nodeHistory.history.slice(-MAX_HISTORY_ENTRIES);
-    }
-
-    // Show toast notification for status change (only after initial state)
-    if (normalizedStatus) {
-      toastSuccess('Node Online', `"${nodeName}" is now online`);
-    } else {
-      toastError('Node Offline', `"${nodeName}" went offline`);
-    }
-
-    nodeHistory.lastStatus = normalizedStatus;
-    nodeHistory.lastChange = now;
-  }
+  const samples = Array.isArray(history)
+    ? history.slice(-MAX_HISTORY_ENTRIES)
+    : (previous && previous.history) || [];
+  statusHistory.set(nodeId, {
+    lastStatus: state,
+    lastToast: lastToast,
+    lastChange: previous && previous.lastStatus === state ? previous.lastChange : now,
+    history: samples
+  });
 }
 
-function getLastStatusChange(nodeId) {
-  const history = statusHistory.get(nodeId);
-  if (!history) return null;
+function historyWhen(entry) {
+  const date = new Date(entry && (entry.at || entry.time));
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString();
+}
 
-  const timeSince = Date.now() - history.lastChange;
-  return {
-    status: history.lastStatus,
-    since: history.lastChange,
-    duration: formatDuration(timeSince)
-  };
+function historyLabel(status) {
+  const state = Probe.canonicalStatus(status);
+  if (state === 'up') return 'Online';
+  if (state === 'down') return 'Offline';
+  return 'Unknown';
 }
 
 // ============================================
@@ -3553,7 +3590,7 @@ function saveStateForUndo(actionName = 'Change') {
     action: actionName,
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
 
   undoStack.push(state);
@@ -3580,14 +3617,14 @@ function undo() {
     action: 'Current',
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
   redoStack.push(currentState);
 
   // Restore previous state
   const previousState = undoStack.pop();
   config.nodes = previousState.nodes;
-  config.connections = previousState.connections;
+  config.links = previousState.links;
 
   // Re-render
   renderTree(config.nodes);
@@ -3610,14 +3647,14 @@ function redo() {
     action: 'Current',
     timestamp: Date.now(),
     nodes: JSON.parse(JSON.stringify(config.nodes)),
-    connections: JSON.parse(JSON.stringify(config.connections))
+    links: JSON.parse(JSON.stringify(config.links))
   };
   undoStack.push(currentState);
 
   // Restore next state
   const nextState = redoStack.pop();
   config.nodes = nextState.nodes;
-  config.connections = nextState.connections;
+  config.links = nextState.links;
 
   // Re-render
   renderTree(config.nodes);
@@ -3729,11 +3766,10 @@ function updateMinimap() {
   const scaleX = minimapWidth / worldWidth;
   const scaleY = minimapHeight / worldHeight;
 
-  // Draw connections
-  ctx.strokeStyle = isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.4)';
+  // Draw connections. Color follows the ends and the active choice.
   ctx.lineWidth = 1;
 
-  config.connections.forEach(conn => {
+  config.links.forEach(conn => {
     const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
     const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
     if (!sourceNode || !targetNode) return;
@@ -3742,11 +3778,15 @@ function updateMinimap() {
     const y1 = (sourceNode.y / 100) * window.innerHeight * scaleY;
     const x2 = (targetNode.x / 100) * window.innerWidth * scaleX;
     const y2 = (targetNode.y / 100) * window.innerHeight * scaleY;
+    const look = linkAppearance(conn, displayedNodes());
 
     ctx.beginPath();
+    ctx.strokeStyle = look.color;
+    ctx.globalAlpha = look.waiting ? 0.35 : 0.75;
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
+    ctx.globalAlpha = 1;
   });
 
   // Draw nodes
@@ -3755,11 +3795,12 @@ function updateMinimap() {
     const y = (node.y / 100) * window.innerHeight * scaleY;
 
     // Node color based on status
-    const isOnline = node.status === true ||
-                     (networkData.find(n => n.id === node.id)?.status === true);
+    const live = networkData.find(n => n.id === node.id) || node;
+    const view = statusView(live.status);
 
     ctx.fillStyle = selectedNodes.has(node.id) ? '#3b82f6' :
-                    isOnline ? '#22c55e' : '#ef4444';
+                    view.state === 'up' ? '#22c55e' :
+                    view.state === 'down' ? '#ef4444' : '#94a3b8';
 
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);

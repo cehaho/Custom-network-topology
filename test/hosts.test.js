@@ -8,7 +8,8 @@ const {
   isSafePort,
   clampScanRange,
   pingArgs,
-  monitoringInterval
+  monitoringInterval,
+  confirmationCount
 } = require('../lib/hosts');
 
 test('accepts IPv4 addresses and hostnames', () => {
@@ -57,7 +58,11 @@ test('builds ping arguments without a shell', () => {
 
 test('clamps the monitoring interval', () => {
   assert.equal(monitoringInterval(2000), 2000);
-  assert.equal(monitoringInterval(50), 2000);
-  assert.equal(monitoringInterval('nope'), 2000);
+  assert.equal(monitoringInterval(50), 5000);
+  assert.equal(monitoringInterval('nope'), 5000);
+  assert.equal(monitoringInterval(undefined), 5000);
   assert.equal(monitoringInterval(60000), 60000);
+  assert.equal(confirmationCount(undefined), 2);
+  assert.equal(confirmationCount(1), 2);
+  assert.equal(confirmationCount(4), 4);
 });

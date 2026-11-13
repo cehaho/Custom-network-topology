@@ -1,8 +1,10 @@
 mod config;
 mod hosts;
 mod monitor;
+mod probe;
 mod network;
 mod ssh;
+mod topology;
 
 use std::sync::Arc;
 

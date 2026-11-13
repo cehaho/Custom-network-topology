@@ -28,7 +28,7 @@ npm start
 ## What the window does
 
 - Drag nodes, pan the background, and zoom with the scroll wheel.
-- Admin edits names, addresses, parents, link type, and SSH credentials. Saving keeps ports, containers, VLAN zones, and connections that the canvas created.
+- Admin edits the same topology as the canvas, in the same window. Saving keeps links, ports, containers, and VLAN zones.
 - Discover pings an IPv4 range (1–254) and reads the local ARP table.
 - Monitoring pings each node, or opens a TCP connection when the node has a port. A secondary parent is shown as the active parent only when the primary parent is down and the secondary parent is up.
 - Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported. OpenSSH keys and PuTTY `.ppk` files are accepted.
@@ -58,6 +58,8 @@ Custom-network-topology/
 │   ├── config.json         # Sample topology copied on first launch
 │   └── js/
 │       ├── desktop.js      # window.electronAPI backed by Tauri
+│       ├── topology.js     # Shared topology document
+│       ├── admin.js        # Admin table, same document as the canvas
 │       └── app.js          # Canvas, SSH, discovery, monitoring UI
 ├── scripts/
 │   ├── copy-vendor.js      # Copies xterm into renderer/vendor
@@ -69,14 +71,16 @@ Custom-network-topology/
 
 ## Configuration
 
-The saved file has this shape:
+The canvas and the admin table read and write one document:
 
 ```json
 {
+  "schemaVersion": 1,
   "settings": {
     "showGrid": true,
     "gridSize": 100,
-    "snapToGrid": true
+    "snapToGrid": true,
+    "theme": "dark"
   },
   "nodes": [
     {
@@ -84,22 +88,37 @@ The saved file has this shape:
       "name": "Gateway Router",
       "address": "192.168.1.1",
       "port": null,
-      "primaryParentId": null,
-      "secondaryParentId": null,
       "icon": "router",
       "iconType": "lucide",
       "x": 50,
       "y": 85,
-      "sshPort": 22,
-      "sshUser": "admin",
-      "sshPass": ""
+      "ports": [
+        { "id": "node_gateway_in", "name": "IN", "side": "top" },
+        { "id": "node_gateway_out", "name": "OUT", "side": "bottom" }
+      ]
     }
   ],
-  "connections": []
+  "links": [
+    {
+      "id": "link_node_internet_primary",
+      "sourceNodeId": "node_gateway",
+      "sourcePortId": "node_gateway_out",
+      "targetNodeId": "node_internet",
+      "targetPortId": "node_internet_in",
+      "role": "primary",
+      "medium": null,
+      "speed": null
+    }
+  ],
+  "ports": [
+    { "id": "node_gateway_out", "name": "OUT", "side": "bottom", "nodeId": "node_gateway" }
+  ]
 }
 ```
 
-`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. Legacy `primaryParentId` / `secondaryParentId` values are turned into `connections` the first time the canvas loads them.
+`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. A cable is a `link` (`primary` or `failover`) between two node ports. Legacy `primaryParentId` / `secondaryParentId` values, and the old `connections` array, become `links` the first time the file is loaded. Containers and VLAN zones stay on their nodes.
+
+A save is refused unless the JSON has a `nodes` array and a supported `schemaVersion`. The new file is written to a temporary file in the same directory, then renamed. The previous file is kept as `config.json.bak`. Import shows the node count, link count, and version, and asks before replacing the open document.
 
 ## Packages
 
