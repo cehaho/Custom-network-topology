@@ -32,7 +32,7 @@ npm start
 - Discover pings an IPv4 range (1–254) and reads the local ARP table.
 - Monitoring pings each node, or opens a TCP connection when the node has a port. A secondary parent is shown as the active parent only when the primary parent is down and the secondary parent is up.
 - Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported. OpenSSH keys and PuTTY `.ppk` files are accepted.
-- Import and export the topology as JSON. An exported file contains SSH passwords in clear text and is written so that only your user can read it.
+- Import and export the topology as JSON. An export contains no passwords and no key passphrases. It only records, on each node, whether a secret exists and whether that secret is a password or a key passphrase.
 
 ## Where the topology is stored
 
@@ -44,7 +44,7 @@ If you already used the Electron build, the app keeps using that file:
 
 A new install uses Tauri's config directory for `com.custom.network-topology`. The first launch copies `renderer/config.json` there.
 
-Passwords in that file are encrypted with AES-256-GCM. The key lives in the OS keyring under the service `custom-network-topology`. If the keyring cannot be used, the password is stored as plain text and is not marked encrypted. A password written by Electron's safe storage is left untouched: this app cannot decrypt it, and saving again does not wrap that value a second time.
+SSH passwords and key passphrases are not written in that file. Each one is stored in the OS keyring, under the service `custom-network-topology`, with an account of the form `ssh/<node id>/password` or `ssh/<node id>/passphrase`. The topology file only keeps `sshSecret.type` (`password` or `passphrase`) when a secret exists. If the keyring cannot be used, saving a password is refused and the password is not written in clear text. A password already sealed as `enc:v1:` is moved into the keyring on the next successful load. A value written by Electron's safe storage cannot be decrypted; the file is left unchanged and the app reports that.
 
 ## Project layout
 
@@ -116,7 +116,7 @@ The canvas and the admin table read and write one document:
 }
 ```
 
-`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. A cable is a `link` (`primary` or `failover`) between two node ports. Legacy `primaryParentId` / `secondaryParentId` values, and the old `connections` array, become `links` the first time the file is loaded. Containers and VLAN zones stay on their nodes.
+`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. A cable is a `link` (`primary` or `failover`) between two node ports. Legacy `primaryParentId` / `secondaryParentId` values, and the old `connections` array, become `links` the first time the file is loaded. Containers and VLAN zones stay on their nodes. SSH settings on a node are the port, user, auth mode (`password` or `key`), and optional key path. A saved secret is only `sshSecret: { "type": "password" }` or `"passphrase"`. The secret itself is not in this document.
 
 A save is refused unless the JSON has a `nodes` array and a supported `schemaVersion`. The new file is written to a temporary file in the same directory, then renamed. The previous file is kept as `config.json.bak`. Import shows the node count, link count, and version, and asks before replacing the open document.
 

@@ -11,6 +11,7 @@
     "allow-config-save",
     "allow-config-export",
     "allow-config-import",
+    "allow-config-discard-import",
     "allow-ssh-browse-key",
     "allow-ssh-connect",
     "allow-ssh-write",

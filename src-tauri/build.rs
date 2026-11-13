@@ -4,6 +4,7 @@ fn main() {
         "config_save",
         "config_export",
         "config_import",
+        "config_discard_import",
         "ssh_browse_key",
         "ssh_connect",
         "ssh_write",

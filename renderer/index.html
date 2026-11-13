@@ -911,7 +911,8 @@
       </div>
       <div id="ssh-password-group" class="form-group">
         <label class="form-label">Password</label>
-        <input type="password" id="ssh-password" class="form-input" placeholder="Enter password">
+        <input type="password" id="ssh-password" class="form-input" placeholder="Enter password" autocomplete="new-password">
+        <p id="ssh-password-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
       </div>
       <div id="ssh-key-group" class="form-group hidden">
         <label class="form-label">Private Key</label>
@@ -923,7 +924,8 @@
         </div>
         <div class="form-group" style="margin-top: 8px;">
           <label class="form-label">Passphrase (optional)</label>
-          <input type="password" id="ssh-passphrase" class="form-input" placeholder="Key passphrase (if encrypted)">
+          <input type="password" id="ssh-passphrase" class="form-input" placeholder="Key passphrase (if encrypted)" autocomplete="new-password">
+          <p id="ssh-passphrase-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
         </div>
       </div>
       <input type="hidden" id="ssh-node-id">
@@ -1097,9 +1099,27 @@
         <label class="form-label">SSH Credentials (optional)</label>
         <div class="grid grid-cols-3 gap-2">
           <input type="number" id="node-ssh-port" class="form-input" placeholder="SSH Port" value="22">
-          <input type="text" id="node-ssh-user" class="form-input" placeholder="Username">
-          <input type="password" id="node-ssh-pass" class="form-input" placeholder="Password">
+          <input type="text" id="node-ssh-user" class="form-input" placeholder="Username" autocomplete="off">
+          <select id="node-ssh-auth" class="form-input" onchange="toggleNodeSshAuth()">
+            <option value="password">Password</option>
+            <option value="key">Private key</option>
+          </select>
         </div>
+        <div id="node-ssh-password-row" class="mt-2">
+          <input type="password" id="node-ssh-pass" class="form-input" placeholder="Password" autocomplete="new-password">
+          <p id="node-ssh-pass-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
+        </div>
+        <div id="node-ssh-key-row" class="mt-2 hidden">
+          <div class="flex gap-2">
+            <input type="text" id="node-ssh-key-path" class="form-input" placeholder="Private key path" readonly>
+            <button type="button" class="btn btn-secondary" onclick="browseNodeSshKey()">
+              <i data-lucide="folder-open" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <input type="password" id="node-ssh-passphrase" class="form-input mt-2" placeholder="Key passphrase" autocomplete="new-password">
+          <p id="node-ssh-passphrase-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
+        </div>
+        <button type="button" id="node-ssh-secret-clear" class="text-xs text-slate-400 hover:text-red-400 mt-2 hidden" onclick="clearNodeSecretField()">Clear saved secret</button>
       </div>
       <div class="form-group">
         <label class="form-label">Ports / Interfaces</label>

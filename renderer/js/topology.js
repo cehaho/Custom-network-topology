@@ -453,7 +453,7 @@
       y: source.y === undefined ? null : source.y,
       sshPort: source.sshPort || 22,
       sshUser: source.sshUser || '',
-      sshPass: source.sshPass || '',
+      sshAuth: source.sshAuth === 'key' ? 'key' : 'password',
       ports: Array.isArray(source.ports) && source.ports.length > 0
         ? source.ports.map(normalizePort).filter(Boolean)
         : [
@@ -465,6 +465,76 @@
       if (source[key] !== undefined) node[key] = source[key];
     });
     return node;
+  }
+
+  function secretType(node) {
+    const secret = node && node.sshSecret;
+    if (!secret || (secret.type !== 'password' && secret.type !== 'passphrase')) return '';
+    return secret.type;
+  }
+
+  function stripNodeSecretValues(node) {
+    if (!node || typeof node !== 'object') return;
+    delete node.sshPass;
+    delete node.sshPassphrase;
+    delete node._encrypted;
+    delete node.sshSecretClear;
+    if (node.sshSecret && typeof node.sshSecret === 'object') {
+      const type = secretType(node);
+      if (type) node.sshSecret = { type: type };
+      else delete node.sshSecret;
+    }
+  }
+
+  function withoutSecretValues(document) {
+    const copy = clone(document || emptyDocument());
+    (copy.nodes || []).forEach(stripNodeSecretValues);
+    return copy;
+  }
+
+  function hasSecretValues(document) {
+    return ((document && document.nodes) || []).some((node) => {
+      if (!node) return false;
+      if (node.sshPass || node.sshPassphrase || node._encrypted === true) return true;
+      const secret = node.sshSecret;
+      return !!(secret && (secret.value || secret.secret));
+    });
+  }
+
+  function secretHint(node) {
+    if (!node) return '';
+    if (node.sshSecretClear) return 'Secret will be removed';
+    if (node.sshPass || node.sshPassphrase) return 'New secret will be saved';
+    if (secretType(node)) return 'Secret saved';
+    return '';
+  }
+
+  function acceptSecretEdit(node, value) {
+    if (!node || !value) return;
+    delete node.sshSecretClear;
+    if (node.sshAuth === 'key') {
+      node.sshPassphrase = value;
+      delete node.sshPass;
+    } else {
+      node.sshPass = value;
+      delete node.sshPassphrase;
+    }
+  }
+
+  function clearStoredSecret(node) {
+    if (!node) return;
+    delete node.sshPass;
+    delete node.sshPassphrase;
+    delete node.sshSecret;
+    node.sshSecretClear = true;
+  }
+
+  function forgetInheritedSecret(node) {
+    stripNodeSecretValues(node);
+    if (node) {
+      delete node.sshSecret;
+      delete node.sshSecretClear;
+    }
   }
 
   function summary(doc) {
@@ -496,6 +566,14 @@
     setCable: setCable,
     removeNode: removeNode,
     createNode: createNode,
-    collectPorts: collectPorts
+    collectPorts: collectPorts,
+    secretType: secretType,
+    stripNodeSecretValues: stripNodeSecretValues,
+    withoutSecretValues: withoutSecretValues,
+    hasSecretValues: hasSecretValues,
+    secretHint: secretHint,
+    acceptSecretEdit: acceptSecretEdit,
+    clearStoredSecret: clearStoredSecret,
+    forgetInheritedSecret: forgetInheritedSecret
   };
 });

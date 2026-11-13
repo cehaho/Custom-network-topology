@@ -27,9 +27,10 @@
   window.electronAPI = {
     config: {
       load: () => invoke('config_load'),
-      save: (config) => invoke('config_save', { config }),
+      save: (config, importToken) => invoke('config_save', { config, importToken: importToken || null }),
       export: (config) => invoke('config_export', { config }),
-      import: () => invoke('config_import')
+      import: () => invoke('config_import'),
+      discardImport: () => invoke('config_discard_import')
     },
     ssh: {
       connect: (connectionInfo) => invoke('ssh_connect', { connectionInfo }),
