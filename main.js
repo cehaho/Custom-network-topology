@@ -3,84 +3,157 @@ const path = require('path');
 const fs = require('fs');
 const { Client } = require('ssh2');
 const net = require('net');
-const dns = require('dns');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const os = require('os');
+const {
+  isSafeHost,
+  isSafeBaseIp,
+  isSafePort,
+  clampScanRange,
+  pingArgs,
+  monitoringInterval
+} = require('./lib/hosts');
 
-// Store active SSH connections
 const sshConnections = new Map();
+const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
 
-// Main window reference
 let mainWindow;
+let monitoringIntervalId = null;
+let monitoringConfig = null;
 
-// Configuration paths
 const getConfigPath = () => path.join(app.getPath('userData'), 'config.json');
-const getStatusPath = () => path.join(app.getPath('userData'), 'status.json');
 
-// ============================================
-// Password Encryption Utilities
-// ============================================
-
-function encryptPassword(password) {
-  if (!password) return null;
-  try {
-    if (safeStorage.isEncryptionAvailable()) {
-      const encrypted = safeStorage.encryptString(password);
-      return encrypted.toString('base64');
-    }
-  } catch (e) {
-    console.error('Encryption failed:', e);
-  }
-  // Fallback: return as-is (not recommended for production)
-  return password;
+function sendToRenderer(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(channel, payload);
 }
 
-function decryptPassword(encryptedPassword) {
-  if (!encryptedPassword) return null;
+function encryptPassword(password) {
+  if (!password) return { value: null, encrypted: false };
   try {
     if (safeStorage.isEncryptionAvailable()) {
-      const buffer = Buffer.from(encryptedPassword, 'base64');
-      return safeStorage.decryptString(buffer);
+      return {
+        value: safeStorage.encryptString(password).toString('base64'),
+        encrypted: true
+      };
     }
-  } catch (e) {
-    // If decryption fails, it might be a plain text password (legacy)
-    return encryptedPassword;
+  } catch (error) {
+    console.error('Encryption failed:', error);
   }
-  return encryptedPassword;
+  return { value: password, encrypted: false };
+}
+
+function decryptPassword(storedPassword) {
+  if (!storedPassword) return null;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(Buffer.from(storedPassword, 'base64'));
+    }
+  } catch (error) {
+    return storedPassword;
+  }
+  return storedPassword;
 }
 
 function encryptConfigPasswords(config) {
-  if (!config || !config.nodes) return config;
+  if (!config || !Array.isArray(config.nodes)) return config;
 
   const encrypted = JSON.parse(JSON.stringify(config));
-  encrypted.nodes = encrypted.nodes.map(node => {
-    if (node.sshPass && !node._encrypted) {
-      return {
-        ...node,
-        sshPass: encryptPassword(node.sshPass),
-        _encrypted: true
-      };
-    }
-    return node;
+  encrypted.nodes = encrypted.nodes.map((node) => {
+    if (!node.sshPass || node._encrypted) return node;
+    const result = encryptPassword(node.sshPass);
+    return {
+      ...node,
+      sshPass: result.value,
+      _encrypted: result.encrypted
+    };
   });
   return encrypted;
 }
 
 function decryptConfigPasswords(config) {
-  if (!config || !config.nodes) return config;
+  if (!config || !Array.isArray(config.nodes)) return config;
 
   const decrypted = JSON.parse(JSON.stringify(config));
-  decrypted.nodes = decrypted.nodes.map(node => {
-    if (node.sshPass && node._encrypted) {
-      return {
-        ...node,
-        sshPass: decryptPassword(node.sshPass),
-        _encrypted: false
-      };
-    }
-    return node;
+  decrypted.nodes = decrypted.nodes.map((node) => {
+    if (!node.sshPass || !node._encrypted) return node;
+    return {
+      ...node,
+      sshPass: decryptPassword(node.sshPass),
+      _encrypted: false
+    };
   });
   return decrypted;
+}
+
+function emptyConfig() {
+  return {
+    settings: { showGrid: true, gridSize: 100, snapToGrid: true },
+    nodes: [],
+    connections: []
+  };
+}
+
+function normalizeConfig(parsed) {
+  if (Array.isArray(parsed)) {
+    return { ...emptyConfig(), nodes: parsed };
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Configuration must be a JSON object or an array of nodes');
+  }
+  return {
+    settings: parsed.settings && typeof parsed.settings === 'object'
+      ? parsed.settings
+      : emptyConfig().settings,
+    nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+    connections: Array.isArray(parsed.connections) ? parsed.connections : []
+  };
+}
+
+function readConfigFile(filePath) {
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX_CONFIG_BYTES) {
+    throw new Error('Configuration file is larger than 5 MB');
+  }
+  return normalizeConfig(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+}
+
+function pingHost(host, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!isSafeHost(host)) {
+      resolve({ online: false, duration: 0 });
+      return;
+    }
+    const start = Date.now();
+    execFile('ping', pingArgs(host), { timeout: timeoutMs }, (error) => {
+      resolve({ online: !error, duration: Date.now() - start });
+    });
+  });
+}
+
+function checkPort(host, port, timeout) {
+  return new Promise((resolve) => {
+    if (!isSafeHost(host) || !isSafePort(port)) {
+      resolve(false);
+      return;
+    }
+    const socket = new net.Socket();
+    const numericPort = Number(port);
+    let settled = false;
+
+    const finish = (online) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(online);
+    };
+
+    socket.setTimeout(timeout);
+    socket.on('connect', () => finish(true));
+    socket.on('error', () => finish(false));
+    socket.on('timeout', () => finish(false));
+    socket.connect(numericPort, host);
+  });
 }
 
 function createWindow() {
@@ -93,30 +166,60 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     },
-    icon: path.join(__dirname, 'assets', 'icon.png'),
     title: 'Network Topology'
   });
 
-  // Load the main HTML file
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  // Open DevTools in development
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
 
+  if (process.argv.includes('--smoke')) {
+    mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
+      console.error(`SMOKE load failed: ${code} ${description}`);
+      app.exit(1);
+    });
+    mainWindow.webContents.on('did-finish-load', async () => {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const result = await mainWindow.webContents.executeJavaScript(`({
+          terminal: typeof Terminal,
+          fit: !!(window.FitAddon && window.FitAddon.FitAddon),
+          api: !!(window.electronAPI && window.electronAPI.config && window.electronAPI.ssh && window.electronAPI.monitor),
+          nodes: document.querySelectorAll('.node-container').length
+        })`);
+        const ok = result.terminal === 'function' && result.fit && result.api && result.nodes > 0;
+        console.log(`SMOKE ${JSON.stringify(result)}`);
+        app.exit(ok ? 0 : 1);
+      } catch (error) {
+        console.error(error);
+        app.exit(1);
+      }
+    });
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null;
-    // Close all SSH connections when window closes
-    sshConnections.forEach((conn, id) => {
+    sshConnections.forEach((connection) => {
       try {
-        conn.end();
-      } catch (e) {}
+        connection.conn.end();
+      } catch (error) {
+        console.error('Failed to close SSH connection:', error);
+      }
     });
     sshConnections.clear();
   });
+}
+
+function stopMonitoring() {
+  if (monitoringIntervalId) {
+    clearInterval(monitoringIntervalId);
+    monitoringIntervalId = null;
+  }
+  monitoringConfig = null;
 }
 
 app.whenReady().then(() => {
@@ -135,43 +238,33 @@ app.on('window-all-closed', () => {
   }
 });
 
-// ============================================
-// IPC HANDLERS - File Operations
-// ============================================
+app.on('before-quit', () => {
+  stopMonitoring();
+});
 
 ipcMain.handle('config:load', async () => {
   try {
     const configPath = getConfigPath();
-    // If no user config exists, copy from default
     if (!fs.existsSync(configPath)) {
       const defaultConfig = path.join(__dirname, 'renderer', 'config.json');
       if (fs.existsSync(defaultConfig)) {
         fs.copyFileSync(defaultConfig, configPath);
       } else {
-        // Return default empty config
-        return {
-          settings: { showGrid: true, gridSize: 100, snapToGrid: true },
-          nodes: [],
-          connections: []
-        };
+        return emptyConfig();
       }
     }
-    const data = fs.readFileSync(configPath, 'utf8');
-    const config = JSON.parse(data);
-    // Decrypt passwords before sending to renderer
-    return decryptConfigPasswords(config);
+    return decryptConfigPasswords(readConfigFile(configPath));
   } catch (error) {
     console.error('Error loading config:', error);
-    return { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [], connections: [] };
+    return emptyConfig();
   }
 });
 
 ipcMain.handle('config:save', async (event, config) => {
   try {
-    const configPath = getConfigPath();
-    // Encrypt passwords before saving
-    const encryptedConfig = encryptConfigPasswords(config);
-    fs.writeFileSync(configPath, JSON.stringify(encryptedConfig, null, 2));
+    const normalized = normalizeConfig(config);
+    const encryptedConfig = encryptConfigPasswords(normalized);
+    fs.writeFileSync(getConfigPath(), JSON.stringify(encryptedConfig, null, 2));
     return { success: true };
   } catch (error) {
     console.error('Error saving config:', error);
@@ -188,7 +281,7 @@ ipcMain.handle('config:export', async (event, config) => {
     });
 
     if (!result.canceled && result.filePath) {
-      fs.writeFileSync(result.filePath, JSON.stringify(config, null, 2));
+      fs.writeFileSync(result.filePath, JSON.stringify(normalizeConfig(config), null, 2));
       return { success: true, path: result.filePath };
     }
     return { success: false, canceled: true };
@@ -206,8 +299,7 @@ ipcMain.handle('config:import', async () => {
     });
 
     if (!result.canceled && result.filePaths.length > 0) {
-      const data = fs.readFileSync(result.filePaths[0], 'utf8');
-      return { success: true, config: JSON.parse(data) };
+      return { success: true, config: readConfigFile(result.filePaths[0]) };
     }
     return { success: false, canceled: true };
   } catch (error) {
@@ -215,20 +307,16 @@ ipcMain.handle('config:import', async () => {
   }
 });
 
-// ============================================
-// IPC HANDLERS - SSH Connections
-// ============================================
-
 ipcMain.handle('ssh:browseKey', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Select SSH Private Key',
       properties: ['openFile'],
       filters: [
-        { name: 'SSH Keys', extensions: ['pem', 'key', 'ppk', ''] },
+        { name: 'SSH Keys', extensions: ['pem', 'key', 'ppk'] },
         { name: 'All Files', extensions: ['*'] }
       ],
-      defaultPath: require('os').homedir() + '/.ssh'
+      defaultPath: path.join(os.homedir(), '.ssh')
     });
 
     if (!result.canceled && result.filePaths.length > 0) {
@@ -240,67 +328,93 @@ ipcMain.handle('ssh:browseKey', async () => {
   }
 });
 
+function isReasonableUsername(username) {
+  return typeof username === 'string' && username.length > 0 && username.length <= 128 && !/[\r\n\0]/.test(username);
+}
+
 ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
-  const { nodeId, host, port = 22, username, password, privateKeyPath, passphrase } = connectionInfo;
+  const info = connectionInfo || {};
+  const host = info.host;
+  const port = info.port == null ? 22 : info.port;
+  const username = info.username;
+  const password = info.password;
+  const privateKeyPath = info.privateKeyPath;
+  const passphrase = info.passphrase;
+  const nodeId = info.nodeId;
+
+  if (typeof nodeId !== 'string' || nodeId.length === 0 || nodeId.length > 128) {
+    return { success: false, error: 'Invalid node id' };
+  }
+  if (!isSafeHost(host) || !isSafePort(port) || !isReasonableUsername(username)) {
+    return { success: false, error: 'Invalid SSH host, port, or username' };
+  }
 
   return new Promise((resolve) => {
     const conn = new Client();
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
     conn.on('ready', () => {
       conn.shell({ term: 'xterm-256color' }, (err, stream) => {
         if (err) {
           conn.end();
-          resolve({ success: false, error: err.message });
+          finish({ success: false, error: err.message });
           return;
         }
 
-        // Store connection with stream
         sshConnections.set(nodeId, { conn, stream });
 
         stream.on('data', (data) => {
-          mainWindow.webContents.send('ssh:data', { nodeId, data: data.toString() });
+          sendToRenderer('ssh:data', { nodeId, data: data.toString() });
         });
 
         stream.on('close', () => {
-          mainWindow.webContents.send('ssh:closed', { nodeId });
+          sendToRenderer('ssh:closed', { nodeId });
           sshConnections.delete(nodeId);
         });
 
         stream.stderr.on('data', (data) => {
-          mainWindow.webContents.send('ssh:data', { nodeId, data: data.toString() });
+          sendToRenderer('ssh:data', { nodeId, data: data.toString() });
         });
 
-        resolve({ success: true });
+        finish({ success: true });
       });
     });
 
     conn.on('error', (err) => {
-      resolve({ success: false, error: err.message });
+      finish({ success: false, error: err.message });
     });
 
     conn.on('close', () => {
-      mainWindow.webContents.send('ssh:closed', { nodeId });
-      sshConnections.delete(nodeId);
+      if (sshConnections.has(nodeId)) {
+        sendToRenderer('ssh:closed', { nodeId });
+        sshConnections.delete(nodeId);
+      }
     });
 
-    // Connect with password or private key
     const connectConfig = {
       host,
-      port,
+      port: Number(port),
       username,
       readyTimeout: 10000,
       keepaliveInterval: 10000
     };
 
-    // Handle private key authentication
     if (privateKeyPath) {
+      if (typeof privateKeyPath !== 'string') {
+        finish({ success: false, error: 'Invalid private key path' });
+        return;
+      }
       try {
         connectConfig.privateKey = fs.readFileSync(privateKeyPath);
-        if (passphrase) {
-          connectConfig.passphrase = passphrase;
-        }
+        if (passphrase) connectConfig.passphrase = passphrase;
       } catch (keyError) {
-        resolve({ success: false, error: `Failed to read private key: ${keyError.message}` });
+        finish({ success: false, error: `Failed to read private key: ${keyError.message}` });
         return;
       }
     } else if (password) {
@@ -310,27 +424,35 @@ ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
     try {
       conn.connect(connectConfig);
     } catch (error) {
-      resolve({ success: false, error: error.message });
+      finish({ success: false, error: error.message });
     }
   });
 });
 
-ipcMain.handle('ssh:write', async (event, { nodeId, data }) => {
+ipcMain.handle('ssh:write', async (event, payload) => {
+  const nodeId = payload && payload.nodeId;
+  const data = payload && payload.data;
   const connection = sshConnections.get(nodeId);
-  if (connection && connection.stream) {
+  if (connection && connection.stream && typeof data === 'string') {
     connection.stream.write(data);
     return { success: true };
   }
   return { success: false, error: 'Connection not found' };
 });
 
-ipcMain.handle('ssh:resize', async (event, { nodeId, cols, rows }) => {
+ipcMain.handle('ssh:resize', async (event, payload) => {
+  const nodeId = payload && payload.nodeId;
+  const cols = payload && payload.cols;
+  const rows = payload && payload.rows;
   const connection = sshConnections.get(nodeId);
-  if (connection && connection.stream) {
-    connection.stream.setWindow(rows, cols, 0, 0);
-    return { success: true };
+  if (!connection || !connection.stream) {
+    return { success: false, error: 'Connection not found' };
   }
-  return { success: false, error: 'Connection not found' };
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 500 || rows > 500) {
+    return { success: false, error: 'Invalid terminal size' };
+  }
+  connection.stream.setWindow(rows, cols, 0, 0);
+  return { success: true };
 });
 
 ipcMain.handle('ssh:disconnect', async (event, nodeId) => {
@@ -338,24 +460,23 @@ ipcMain.handle('ssh:disconnect', async (event, nodeId) => {
   if (connection) {
     try {
       connection.conn.end();
-    } catch (e) {}
+    } catch (error) {
+      console.error('Failed to disconnect SSH:', error);
+    }
     sshConnections.delete(nodeId);
     return { success: true };
   }
   return { success: false, error: 'Connection not found' };
 });
 
-// ============================================
-// IPC HANDLERS - Network Discovery
-// ============================================
-
 ipcMain.handle('network:getLocalInfo', async () => {
   const interfaces = os.networkInterfaces();
   const result = [];
 
   for (const [name, addrs] of Object.entries(interfaces)) {
-    for (const addr of addrs) {
-      if (addr.family === 'IPv4' && !addr.internal) {
+    for (const addr of addrs || []) {
+      const isIpv4 = addr.family === 'IPv4' || addr.family === 4;
+      if (isIpv4 && !addr.internal) {
         result.push({
           interface: name,
           address: addr.address,
@@ -370,235 +491,113 @@ ipcMain.handle('network:getLocalInfo', async () => {
 });
 
 ipcMain.handle('network:ping', async (event, host) => {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const isWindows = process.platform === 'win32';
-    const cmd = isWindows
-      ? `ping -n 1 -w 1000 ${host}`
-      : `ping -c 1 -W 1 ${host}`;
-
-    exec(cmd, (error, stdout) => {
-      const duration = Date.now() - start;
-      if (error) {
-        resolve({ success: false, host, duration });
-      } else {
-        resolve({ success: true, host, duration });
-      }
-    });
-  });
+  const start = Date.now();
+  const result = await pingHost(host, 5000);
+  if (!isSafeHost(host)) {
+    return { success: false, host, duration: 0, error: 'Invalid host' };
+  }
+  return { success: result.online, host, duration: result.duration || (Date.now() - start) };
 });
 
-ipcMain.handle('network:portCheck', async (event, { host, port, timeout = 2000 }) => {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const start = Date.now();
-
-    socket.setTimeout(timeout);
-
-    socket.on('connect', () => {
-      socket.destroy();
-      resolve({ success: true, host, port, duration: Date.now() - start });
-    });
-
-    socket.on('error', () => {
-      socket.destroy();
-      resolve({ success: false, host, port, duration: Date.now() - start });
-    });
-
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve({ success: false, host, port, duration: timeout });
-    });
-
-    socket.connect(port, host);
-  });
-});
-
-ipcMain.handle('network:scan', async (event, { baseIp, startRange, endRange }) => {
-  // Scan IP range for active hosts
-  const results = [];
-  const scanPromises = [];
-
-  for (let i = startRange; i <= endRange; i++) {
-    const ip = `${baseIp}.${i}`;
-    scanPromises.push(
-      new Promise((resolve) => {
-        const isWindows = process.platform === 'win32';
-        const cmd = isWindows
-          ? `ping -n 1 -w 500 ${ip}`
-          : `ping -c 1 -W 1 ${ip}`;
-
-        exec(cmd, (error) => {
-          if (!error) {
-            results.push({ ip, online: true });
-          }
-          resolve();
-        });
-      })
-    );
-
-    // Batch pings to avoid overwhelming the system
-    if (scanPromises.length >= 20) {
-      await Promise.all(scanPromises);
-      scanPromises.length = 0;
-      // Report progress
-      mainWindow.webContents.send('network:scanProgress', {
-        current: i - startRange + 1,
-        total: endRange - startRange + 1,
-        found: results.length
-      });
-    }
+ipcMain.handle('network:scan', async (event, payload) => {
+  const baseIp = payload && payload.baseIp;
+  const range = clampScanRange(payload && payload.startRange, payload && payload.endRange);
+  if (!isSafeBaseIp(baseIp) || !range) {
+    throw new Error('Invalid scan range');
   }
 
-  // Wait for remaining pings
-  await Promise.all(scanPromises);
+  const results = [];
+  const batchSize = 20;
+
+  for (let start = range.start; start <= range.end; start += batchSize) {
+    const end = Math.min(start + batchSize - 1, range.end);
+    const batch = [];
+    for (let octet = start; octet <= end; octet += 1) {
+      const ip = `${baseIp}.${octet}`;
+      batch.push(pingHost(ip, 2000).then((result) => {
+        if (result && result.online) results.push({ ip, online: true });
+      }));
+    }
+    await Promise.all(batch);
+    sendToRenderer('network:scanProgress', {
+      current: end - range.start + 1,
+      total: range.end - range.start + 1,
+      found: results.length
+    });
+  }
 
   return results;
 });
 
 ipcMain.handle('network:arp', async () => {
   return new Promise((resolve) => {
-    const isWindows = process.platform === 'win32';
-    const cmd = isWindows ? 'arp -a' : 'arp -a';
-
-    exec(cmd, (error, stdout) => {
+    execFile('arp', ['-a'], { timeout: 5000 }, (error, stdout) => {
       if (error) {
         resolve([]);
         return;
       }
 
       const entries = [];
-      const lines = stdout.split('\n');
-
-      for (const line of lines) {
-        // Parse ARP table entries
+      const isWindows = process.platform === 'win32';
+      for (const line of String(stdout).split('\n')) {
         const match = isWindows
           ? line.match(/(\d+\.\d+\.\d+\.\d+)\s+([\da-f-]+)/i)
           : line.match(/\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([\da-f:]+)/i);
 
-        if (match) {
+        if (match && isSafeHost(match[1])) {
           entries.push({
             ip: match[1],
             mac: match[2].replace(/-/g, ':').toLowerCase()
           });
         }
       }
-
       resolve(entries);
     });
   });
 });
 
-ipcMain.handle('network:resolve', async (event, hostname) => {
-  return new Promise((resolve) => {
-    dns.lookup(hostname, (err, address) => {
-      if (err) {
-        resolve({ success: false, hostname });
-      } else {
-        resolve({ success: true, hostname, address });
-      }
-    });
+async function runMonitoring() {
+  if (!monitoringConfig || !Array.isArray(monitoringConfig.nodes)) return;
+
+  const statusResults = await Promise.all(monitoringConfig.nodes.map(async (node) => {
+    const start = Date.now();
+    let online = false;
+
+    if (node && node.port) {
+      online = await checkPort(node.address, node.port, 1000);
+    } else if (node && node.address) {
+      const result = await pingHost(node.address, 2000);
+      online = Boolean(result && result.online);
+    }
+
+    const publicNode = { ...(node || {}) };
+    delete publicNode.sshPass;
+    return {
+      ...publicNode,
+      status: online,
+      responseTime: Date.now() - start
+    };
+  }));
+
+  sendToRenderer('monitor:status', {
+    nodes: statusResults,
+    updated: new Date().toLocaleTimeString()
   });
-});
-
-// ============================================
-// IPC HANDLERS - Monitoring
-// ============================================
-
-let monitoringInterval = null;
-let monitoringConfig = null;
+}
 
 ipcMain.handle('monitor:start', async (event, config) => {
-  monitoringConfig = config;
-
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
+  if (monitoringIntervalId) {
+    clearInterval(monitoringIntervalId);
+    monitoringIntervalId = null;
   }
+  monitoringConfig = normalizeConfig(config);
 
-  const runMonitoring = async () => {
-    if (!monitoringConfig || !monitoringConfig.nodes) return;
-
-    const statusResults = await Promise.all(
-      monitoringConfig.nodes.map(async (node) => {
-        const start = Date.now();
-        let online = false;
-
-        if (node.port) {
-          // TCP port check
-          online = await new Promise((resolve) => {
-            const socket = new net.Socket();
-            socket.setTimeout(1000);
-            socket.on('connect', () => {
-              socket.destroy();
-              resolve(true);
-            });
-            socket.on('error', () => {
-              socket.destroy();
-              resolve(false);
-            });
-            socket.on('timeout', () => {
-              socket.destroy();
-              resolve(false);
-            });
-            socket.connect(node.port, node.address);
-          });
-        } else {
-          // Ping check
-          const isWindows = process.platform === 'win32';
-          const cmd = isWindows
-            ? `ping -n 1 -w 500 ${node.address}`
-            : `ping -c 1 -W 1 ${node.address}`;
-
-          online = await new Promise((resolve) => {
-            exec(cmd, (error) => resolve(!error));
-          });
-        }
-
-        return {
-          ...node,
-          status: online,
-          responseTime: Date.now() - start
-        };
-      })
-    );
-
-    mainWindow.webContents.send('monitor:status', {
-      nodes: statusResults,
-      updated: new Date().toLocaleTimeString()
-    });
-  };
-
-  // Run immediately then on interval
   await runMonitoring();
-  monitoringInterval = setInterval(runMonitoring, config.interval || 2000);
-
+  monitoringIntervalId = setInterval(runMonitoring, monitoringInterval(config && config.interval));
   return { success: true };
 });
 
 ipcMain.handle('monitor:stop', async () => {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
-    monitoringInterval = null;
-  }
+  stopMonitoring();
   return { success: true };
-});
-
-// ============================================
-// IPC HANDLERS - Window Controls
-// ============================================
-
-ipcMain.handle('window:minimize', () => {
-  mainWindow.minimize();
-});
-
-ipcMain.handle('window:maximize', () => {
-  if (mainWindow.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow.maximize();
-  }
-});
-
-ipcMain.handle('window:close', () => {
-  mainWindow.close();
 });
