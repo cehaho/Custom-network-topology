@@ -1,18 +1,26 @@
 # Network Topology Manager
 
-Desktop app for drawing a network topology, watching whether hosts answer, and opening an SSH terminal on a node. The window is a static page. Tauri hosts it and runs ping, ARP, and SSH.
+Application de bureau pour dessiner une topologie réseau, voir quels hôtes répondent, et ouvrir un terminal SSH sur un nœud. La fenêtre est une page statique. **Tauri** l’héberge et exécute le ping, l’ARP et le SSH (plus d’Electron).
 
-The sample layout is four hosts: a gateway, the Internet (`8.8.8.8`), a NAS, and a workstation. Your real topology is saved outside the repository.
+Le schéma d’exemple comporte quatre hôtes : une passerelle, Internet (`8.8.8.8`), un NAS et un poste de travail. Votre topologie réelle est enregistrée hors du dépôt.
 
-## What you need
+## Prérequis
 
-- Node.js 18 or newer
+- Node.js 18 ou plus récent
 - npm
-- Rust stable (1.90 or newer) and Cargo
-- On Linux, WebKitGTK 4.1 and GTK 3 development libraries
-- A network connection the first time the window opens. The interface loads Tailwind CSS and Lucide icons from their CDNs. The SSH terminal itself is copied from `node_modules` at install time and does not use a CDN.
+- Rust stable (1.90 ou plus) et Cargo
+- Sous Linux : WebKitGTK 4.1 et les bibliothèques de développement GTK 3
+- Une connexion réseau au premier lancement. L’interface charge Tailwind CSS et Lucide depuis leurs CDN. Le terminal SSH est copié depuis `node_modules` à l’installation et n’utilise pas de CDN.
 
-## Run
+Sous Debian / Ubuntu, les paquets WebKitGTK / GTK ressemblent souvent à :
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev
+```
+
+Les noms exacts dépendent de la distribution. Sans WebKitGTK, `npm start` échoue à la compilation Tauri.
+
+## Lancer
 
 ```bash
 git clone https://github.com/cehaho/Custom-network-topology.git
@@ -21,57 +29,59 @@ npm install
 npm start
 ```
 
-`npm run dev` is the same command. `npm run build` packages the app for the operating system you are on.
+`npm start` et `npm run dev` lancent `tauri dev`. `npm run build` empaquete l’application pour le système d’exploitation en cours.
 
-`npm test` checks host validation in JavaScript and Rust. It does not open a window.
+`npm test` exécute les tests JavaScript (`node --test`) et Rust (`cargo test` dans `src-tauri/`). Aucune fenêtre n’est ouverte.
 
-## What the window does
+## Ce que fait la fenêtre
 
-- Drag nodes, pan the background, and zoom with the scroll wheel.
-- Admin edits the same topology as the canvas, in the same window. Saving keeps links, ports, containers, and VLAN zones.
-- Discover pings an IPv4 range (1–254) and reads the local ARP table.
-- Monitoring pings each node, or opens a TCP connection when the node has a port. A secondary parent is shown as the active parent only when the primary parent is down and the secondary parent is up.
-- Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported. OpenSSH keys and PuTTY `.ppk` files are accepted.
-- Import and export the topology as JSON. An export contains no passwords and no key passphrases. It only records, on each node, whether a secret exists and whether that secret is a password or a key passphrase.
+- Déplacer les nœuds, panoramiquer le fond, zoomer à la molette.
+- **Admin** édite le **même document** de topologie que le canevas, dans la même fenêtre. Une sauvegarde conserve les liens, ports, conteneurs et zones VLAN.
+- **Découvrir** envoie un ping sur une plage IPv4 (1–254) et lit la table ARP locale.
+- **Supervision** : chaque nœud est sondé (ping ICMP, ou connexion TCP si un port est défini). L’intervalle par défaut est de 5 s (`settings.probeIntervalMs`). L’état reste `unknown` jusqu’à deux résultats concordants (`settings.confirmations`) ; un seul échec ne bascule pas le nœud. Au plus une vingtaine de sondes tournent en parallèle. L’historique court est écrit à part dans `status.json`.
+- **Lien actif / secours** : si un nœud a un lien `primary` et un lien `failover`, le lien actif est le primaire tant que le voisin primaire répond ; sinon le secours si son voisin répond ; sinon le primaire (en panne). Seul le lien actif est animé. Le secours reste visible, en attente, tant que le primaire répond.
+- Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
+- Import et export de la topologie en JSON. Un export **ne contient aucun** mot de passe ni passphrase de clé. Il indique seulement, sur chaque nœud, si un secret existe et s’il s’agit d’un mot de passe ou d’une passphrase (`sshSecret.type`).
 
-## Where the topology is stored
+## Où est stockée la topologie
 
-If you already used the Electron build, the app keeps using that file:
+Si vous avez déjà utilisé la build Electron, l’application continue d’utiliser ce fichier :
 
-- Linux: `~/.config/custom-network-topology/config.json`
-- macOS: `~/Library/Application Support/custom-network-topology/config.json`
-- Windows: `%APPDATA%\custom-network-topology\config.json`
+- Linux : `~/.config/custom-network-topology/config.json`
+- macOS : `~/Library/Application Support/custom-network-topology/config.json`
+- Windows : `%APPDATA%\custom-network-topology\config.json`
 
-A new install uses Tauri's config directory for `com.custom.network-topology`. The first launch copies `renderer/config.json` there.
+Une installation neuve utilise le répertoire de config Tauri pour `com.custom.network-topology`. Au premier lancement, `renderer/config.json` y est copié.
 
-SSH passwords and key passphrases are not written in that file. Each one is stored in the OS keyring, under the service `custom-network-topology`, with an account of the form `ssh/<node id>/password` or `ssh/<node id>/passphrase`. The topology file only keeps `sshSecret.type` (`password` or `passphrase`) when a secret exists. If the keyring cannot be used, saving a password is refused and the password is not written in clear text. A password already sealed as `enc:v1:` is moved into the keyring on the next successful load. A value written by Electron's safe storage cannot be decrypted; the file is left unchanged and the app reports that.
+Les mots de passe SSH et les passphrases de clé **ne sont pas** écrits dans ce fichier. Chacun est stocké dans le **trousseau du système** (service `custom-network-topology`, compte du type `ssh/<id du nœud>/password` ou `ssh/<id du nœud>/passphrase`). Le fichier de topologie ne conserve que `sshSecret.type` (`password` ou `passphrase`) lorsqu’un secret existe. Si le trousseau est indisponible, l’enregistrement d’un mot de passe est refusé : il n’est pas écrit en clair. Un mot de passe déjà scellé en `enc:v1:` est déplacé vers le trousseau au prochain chargement réussi. Une valeur écrite par le safe storage d’Electron ne peut pas être déchiffrée ; le fichier reste inchangé et l’application le signale.
 
-## Project layout
+## Structure du projet
 
 ```
 Custom-network-topology/
-├── src-tauri/              # Tauri commands: config, SSH, ping, scan, monitoring
-├── lib/hosts.js            # Host, port, and scan-range checks (mirrored in Rust)
+├── src-tauri/              # Commandes Tauri : config, SSH, ping, scan, sondes, secrets
+├── lib/hosts.js            # Contrôles hôte / port / plage (mirroir Rust)
 ├── renderer/
-│   ├── index.html          # Topology window
-│   ├── admin.html          # Node editor
-│   ├── config.json         # Sample topology copied on first launch
+│   ├── index.html          # Fenêtre topologie
+│   ├── admin.html          # Éditeur de nœuds (même document)
+│   ├── config.json         # Exemple copié au premier lancement
 │   └── js/
-│       ├── desktop.js      # window.electronAPI backed by Tauri
-│       ├── topology.js     # Shared topology document
-│       ├── admin.js        # Admin table, same document as the canvas
-│       └── app.js          # Canvas, SSH, discovery, monitoring UI
+│       ├── desktop.js      # window.electronAPI branché sur Tauri
+│       ├── topology.js     # Document de topologie partagé
+│       ├── probe.js        # Confirmation d’état et lien actif
+│       ├── admin.js        # Tableau Admin
+│       └── app.js          # Canevas, SSH, découverte, UI de supervision
 ├── scripts/
-│   ├── copy-vendor.js      # Copies xterm into renderer/vendor
-│   └── dev-server.js       # Serves renderer/ on 127.0.0.1:1420
-└── test/hosts.test.js
+│   ├── copy-vendor.js      # Copie xterm dans renderer/vendor
+│   └── dev-server.js       # Sert renderer/ sur 127.0.0.1:1420
+└── test/                   # hosts, topology, probe, secrets, config
 ```
 
-`renderer/vendor/` is generated by `npm install`. It is not committed.
+`renderer/vendor/` est généré par `npm install`. Il n’est pas versionné. Le nom `window.electronAPI` est conservé côté rendu pour limiter le diff ; l’implémentation est Tauri.
 
 ## Configuration
 
-The canvas and the admin table read and write one document:
+Le canevas et le tableau Admin lisent et écrivent **un seul** document :
 
 ```json
 {
@@ -80,7 +90,9 @@ The canvas and the admin table read and write one document:
     "showGrid": true,
     "gridSize": 100,
     "snapToGrid": true,
-    "theme": "dark"
+    "theme": "dark",
+    "probeIntervalMs": 5000,
+    "confirmations": 2
   },
   "nodes": [
     {
@@ -116,30 +128,32 @@ The canvas and the admin table read and write one document:
 }
 ```
 
-`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. A cable is a `link` (`primary` or `failover`) between two node ports. Legacy `primaryParentId` / `secondaryParentId` values, and the old `connections` array, become `links` the first time the file is loaded. Containers and VLAN zones stay on their nodes. SSH settings on a node are the port, user, auth mode (`password` or `key`), and optional key path. A saved secret is only `sshSecret: { "type": "password" }` or `"passphrase"`. The secret itself is not in this document.
+`address` est une IPv4 ou un nom d’hôte. Un `port` numérique fait utiliser le TCP au lieu du ping. Les positions sont des pourcentages. Un câble est un `link` (`primary` ou `failover`) entre deux ports de nœuds. Les anciens `primaryParentId` / `secondaryParentId`, et l’ancien tableau `connections`, deviennent des `links` au premier chargement. Conteneurs et zones VLAN restent sur leurs nœuds. Les réglages SSH d’un nœud sont le port, l’utilisateur, le mode d’auth (`password` ou `key`), et le chemin de clé optionnel. Un secret enregistré n’apparaît que comme `sshSecret: { "type": "password" }` ou `"passphrase"`. Le secret lui-même n’est pas dans ce document.
 
-A save is refused unless the JSON has a `nodes` array and a supported `schemaVersion`. The new file is written to a temporary file in the same directory, then renamed. The previous file is kept as `config.json.bak`. Import shows the node count, link count, and version, and asks before replacing the open document.
+Une sauvegarde est refusée si le JSON n’a pas de tableau `nodes` ni de `schemaVersion` supporté. Le nouveau fichier est écrit dans un temporaire du même dossier, puis renommé. Le fichier précédent est conservé en `config.json.bak`. L’import affiche le nombre de nœuds, de liens et la version, et demande confirmation avant de remplacer le document ouvert.
 
-## Packages
+## Paquets
 
-- `@tauri-apps/cli` runs and packages the window
-- `xterm` and `xterm-addon-fit` draw the terminal
-- SSH is implemented in Rust with `russh`, not a Node package
+- `@tauri-apps/cli` lance et empaquete la fenêtre
+- `xterm` et `xterm-addon-fit` dessinent le terminal
+- Le SSH est implémenté en Rust avec `russh`, pas un paquet Node
 
-## Checks
+## Vérifications
 
 ```bash
 npm test
 ```
 
-## Limits
+Couvre la validation des hôtes, le document de topologie, la confirmation de sonde / lien actif, et le traitement des secrets (côté JS et Rust selon les modules).
 
-- Discovery and monitoring understand IPv4 only.
-- Tailwind and Lucide are loaded from the Internet. Without it, the page has no utility styles and no icons.
-- `xterm` 5 and `xterm-addon-fit` 0.8 are the packages this UI was written against. Both names are deprecated upstream in favor of `@xterm/xterm` and `@xterm/addon-fit`.
-- SSH accepts the server host key without remembering it. That matches the previous client. A known-hosts check is not in this version.
-- There is no automated test of the canvas. `npm test` covers the checks that decide whether a host is safe to pass to `ping`.
+## Limites
 
-## License
+- Découverte et supervision en IPv4 uniquement.
+- Tailwind et Lucide sont chargés depuis Internet. Sans réseau, la page n’a ni styles utilitaires ni icônes.
+- `xterm` 5 et `xterm-addon-fit` 0.8 sont les paquets contre lesquels cette UI a été écrite. Les deux noms sont dépréciés en amont au profit de `@xterm/xterm` et `@xterm/addon-fit`.
+- Le SSH accepte la clé d’hôte du serveur sans la mémoriser. Pas de contrôle known-hosts dans cette version.
+- Pas de test automatisé du canevas. `npm test` ne couvre pas l’UI graphique.
 
-MIT. See [LICENSE](LICENSE).
+## Licence
+
+MIT. Voir [LICENSE](LICENSE).
