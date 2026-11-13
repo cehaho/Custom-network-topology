@@ -1,13 +1,15 @@
 # Network Topology Manager
 
-Electron desktop app for drawing a network topology, watching whether hosts answer, and opening an SSH terminal on a node.
+Desktop app for drawing a network topology, watching whether hosts answer, and opening an SSH terminal on a node. The window is a static page. Tauri hosts it and runs ping, ARP, and SSH.
 
-The sample layout is four hosts: a gateway, the Internet (`8.8.8.8`), a NAS, and a workstation. Your real topology is saved in Electron's user-data folder, not in the repository.
+The sample layout is four hosts: a gateway, the Internet (`8.8.8.8`), a NAS, and a workstation. Your real topology is saved outside the repository.
 
 ## What you need
 
 - Node.js 18 or newer
 - npm
+- Rust stable (1.90 or newer) and Cargo
+- On Linux, WebKitGTK 4.1 and GTK 3 development libraries
 - A network connection the first time the window opens. The interface loads Tailwind CSS and Lucide icons from their CDNs. The SSH terminal itself is copied from `node_modules` at install time and does not use a CDN.
 
 ## Run
@@ -19,9 +21,9 @@ npm install
 npm start
 ```
 
-`npm run dev` opens the same window with DevTools.
+`npm run dev` is the same command. `npm run build` packages the app for the operating system you are on.
 
-`npm test` checks host validation. It does not launch Electron.
+`npm test` checks host validation in JavaScript and Rust. It does not open a window.
 
 ## What the window does
 
@@ -29,22 +31,37 @@ npm start
 - Admin edits names, addresses, parents, link type, and SSH credentials. Saving keeps ports, containers, VLAN zones, and connections that the canvas created.
 - Discover pings an IPv4 range (1–254) and reads the local ARP table.
 - Monitoring pings each node, or opens a TCP connection when the node has a port. A secondary parent is shown as the active parent only when the primary parent is down and the secondary parent is up.
-- Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported.
-- Import and export the topology as JSON. An exported file contains SSH passwords in clear text. The copy stored by the app is encrypted with the operating system when Electron's safe storage is available.
+- Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported. OpenSSH keys and PuTTY `.ppk` files are accepted.
+- Import and export the topology as JSON. An exported file contains SSH passwords in clear text and is written so that only your user can read it.
+
+## Where the topology is stored
+
+If you already used the Electron build, the app keeps using that file:
+
+- Linux: `~/.config/custom-network-topology/config.json`
+- macOS: `~/Library/Application Support/custom-network-topology/config.json`
+- Windows: `%APPDATA%\custom-network-topology\config.json`
+
+A new install uses Tauri's config directory for `com.custom.network-topology`. The first launch copies `renderer/config.json` there.
+
+Passwords in that file are encrypted with AES-256-GCM. The key lives in the OS keyring under the service `custom-network-topology`. If the keyring cannot be used, the password is stored as plain text and is not marked encrypted. A password written by Electron's safe storage is left untouched: this app cannot decrypt it, and saving again does not wrap that value a second time.
 
 ## Project layout
 
 ```
 Custom-network-topology/
-├── main.js                 # Electron main process
-├── preload.js              # IPC bridge exposed as window.electronAPI
-├── lib/hosts.js            # Host, port, and scan-range checks
+├── src-tauri/              # Tauri commands: config, SSH, ping, scan, monitoring
+├── lib/hosts.js            # Host, port, and scan-range checks (mirrored in Rust)
 ├── renderer/
 │   ├── index.html          # Topology window
 │   ├── admin.html          # Node editor
 │   ├── config.json         # Sample topology copied on first launch
-│   └── js/app.js           # Canvas, SSH, discovery, monitoring UI
-├── scripts/copy-vendor.js  # Copies xterm into renderer/vendor after npm install
+│   └── js/
+│       ├── desktop.js      # window.electronAPI backed by Tauri
+│       └── app.js          # Canvas, SSH, discovery, monitoring UI
+├── scripts/
+│   ├── copy-vendor.js      # Copies xterm into renderer/vendor
+│   └── dev-server.js       # Serves renderer/ on 127.0.0.1:1420
 └── test/hosts.test.js
 ```
 
@@ -84,32 +101,24 @@ The saved file has this shape:
 
 `address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. Legacy `primaryParentId` / `secondaryParentId` values are turned into `connections` the first time the canvas loads them.
 
-Passwords are encrypted before they are written to the user-data config. A password is left as plain text only when the OS encryption API is unavailable, and that value is not marked as encrypted.
-
 ## Packages
 
-Runtime:
-
-- `electron` is installed as a dev dependency and is required to run the app
-- `ssh2` for SSH
-- `xterm` and `xterm-addon-fit` for the terminal
-
-`electron-builder` is only used by `npm run build`, `build:win`, `build:mac`, and `build:linux`. The repository has no application icons, so the packaged app uses Electron's default icon.
+- `@tauri-apps/cli` runs and packages the window
+- `xterm` and `xterm-addon-fit` draw the terminal
+- SSH is implemented in Rust with `russh`, not a Node package
 
 ## Checks
 
 ```bash
 npm test
-npx electron . --smoke
 ```
-
-`--smoke` opens the window, checks that the terminal library and the preload bridge loaded, then exits.
 
 ## Limits
 
 - Discovery and monitoring understand IPv4 only.
 - Tailwind and Lucide are loaded from the Internet. Without it, the page has no utility styles and no icons.
 - `xterm` 5 and `xterm-addon-fit` 0.8 are the packages this UI was written against. Both names are deprecated upstream in favor of `@xterm/xterm` and `@xterm/addon-fit`.
+- SSH accepts the server host key without remembering it. That matches the previous client. A known-hosts check is not in this version.
 - There is no automated test of the canvas. `npm test` covers the checks that decide whether a host is safe to pass to `ping`.
 
 ## License
