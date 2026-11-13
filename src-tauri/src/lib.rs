@@ -3,18 +3,26 @@ mod hosts;
 mod monitor;
 mod probe;
 mod network;
+mod secrets;
 mod ssh;
 mod topology;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+struct PendingImport {
+    token: String,
+    secrets: HashMap<String, secrets::SecretValue>,
+}
+
 struct AppState {
     ssh: Arc<Mutex<ssh::Hub>>,
     monitor: Mutex<Option<JoinHandle<()>>>,
+    pending_import: StdMutex<Option<PendingImport>>,
 }
 
 #[tauri::command]
@@ -23,8 +31,50 @@ fn config_load(app: tauri::AppHandle) -> Value {
 }
 
 #[tauri::command]
-fn config_save(app: tauri::AppHandle, config: Value) -> Value {
-    config::save(&app, config)
+fn config_save(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    config: Value,
+    import_token: Option<String>,
+) -> Value {
+    let pending = take_matching_import(&state, import_token.as_deref()).unwrap_or_default();
+    let result = config::save(&app, config, &pending);
+    if result.get("success").and_then(Value::as_bool) == Some(true) {
+        let mut guard = pending_import(&state);
+        if guard
+            .as_ref()
+            .is_some_and(|pending| Some(pending.token.as_str()) == import_token.as_deref())
+        {
+            *guard = None;
+        }
+    }
+    result
+}
+
+fn pending_import(
+    state: &tauri::State<'_, AppState>,
+) -> std::sync::MutexGuard<'_, Option<PendingImport>> {
+    state
+        .pending_import
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn take_matching_import(
+    state: &tauri::State<'_, AppState>,
+    import_token: Option<&str>,
+) -> Option<HashMap<String, secrets::SecretValue>> {
+    let mut guard = pending_import(state);
+    match guard.as_ref() {
+        Some(pending) if import_token == Some(pending.token.as_str()) => {
+            Some(pending.secrets.clone())
+        }
+        Some(_) => {
+            *guard = None;
+            None
+        }
+        None => None,
+    }
 }
 
 #[tauri::command]
@@ -33,8 +83,23 @@ fn config_export(app: tauri::AppHandle, config: Value) -> Value {
 }
 
 #[tauri::command]
-fn config_import(app: tauri::AppHandle) -> Value {
-    config::import(&app)
+fn config_import(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Value {
+    let imported = config::import(&app);
+    let mut guard = pending_import(&state);
+    *guard = match (imported.token, imported.secrets.is_empty()) {
+        (Some(token), false) => Some(PendingImport {
+            token,
+            secrets: imported.secrets,
+        }),
+        _ => None,
+    };
+    imported.response
+}
+
+#[tauri::command]
+fn config_discard_import(state: tauri::State<'_, AppState>) -> Value {
+    *pending_import(&state) = None;
+    serde_json::json!({ "success": true })
 }
 
 #[tauri::command]
@@ -132,6 +197,7 @@ pub fn run() {
         .manage(AppState {
             ssh: Arc::new(Mutex::new(ssh::Hub::new())),
             monitor: Mutex::new(None),
+            pending_import: StdMutex::new(None),
         })
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -148,6 +214,7 @@ pub fn run() {
             config_save,
             config_export,
             config_import,
+            config_discard_import,
             ssh_browse_key,
             ssh_connect,
             ssh_write,

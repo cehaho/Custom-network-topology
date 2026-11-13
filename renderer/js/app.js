@@ -11,6 +11,8 @@ let activeTerminal = null;
 let monitoringActive = false;
 let contextMenuNode = null;
 let uptimeTrackers = new Map();
+let pendingImportToken = null;
+let nodeSecretClear = false;
 
 // Status history tracking
 let statusHistory = new Map(); // nodeId -> { lastStatus, lastChange, history: [{status, time}] }
@@ -81,6 +83,10 @@ async function loadConfig() {
       if (res.ok) raw = await res.json();
     }
     if (raw === null) return;
+    if (raw.success === false) {
+      toastError('Topology not loaded', raw.error || 'The topology file was not changed');
+      return;
+    }
 
     const loaded = Topology.read(raw);
     if (!loaded.ok) {
@@ -105,12 +111,33 @@ async function saveConfig() {
     console.error(prepared.error);
     return { success: false, error: prepared.error };
   }
-  config = prepared.document;
+  const snapshot = prepared.document;
   try {
-    if (window.electronAPI) return await window.electronAPI.config.save(config);
-    return { success: true };
+    if (!window.electronAPI) {
+      config = snapshot;
+      if (Topology.hasSecretValues(snapshot)) {
+        (config.nodes || []).forEach((node) => Topology.stripNodeSecretValues(node));
+        return {
+          success: false,
+          error: 'The system keyring is unavailable. The password was not saved.'
+        };
+      }
+      return { success: true };
+    }
+    const result = await window.electronAPI.config.save(snapshot, pendingImportToken);
+    if (result && result.success !== false && result.config) {
+      const loaded = Topology.read(result.config);
+      config = loaded.ok ? loaded.document : Topology.withoutSecretValues(snapshot);
+      pendingImportToken = null;
+      return result;
+    }
+    config = snapshot;
+    (config.nodes || []).forEach((node) => Topology.stripNodeSecretValues(node));
+    return result || { success: false, error: 'Save failed' };
   } catch (error) {
     console.error('Failed to save config:', error);
+    config = snapshot;
+    (config.nodes || []).forEach((node) => Topology.stripNodeSecretValues(node));
     return { success: false, error: error && error.message ? error.message : 'Save failed' };
   }
 }
@@ -128,7 +155,12 @@ async function importTopologyInteractive() {
     toastError('Import refused', loaded.error);
     return null;
   }
-  if (!window.confirm(Topology.importMessage(loaded.document))) return null;
+  if (!window.confirm(Topology.importMessage(loaded.document))) {
+    pendingImportToken = null;
+    if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+    return null;
+  }
+  pendingImportToken = result.importToken || null;
   return loaded.document;
 }
 
@@ -425,7 +457,11 @@ function setupEventListeners() {
       toastError('Export refused', prepared.error);
       return;
     }
-    await window.electronAPI.config.export(prepared.document);
+    const exported = Topology.withoutSecretValues(prepared.document);
+    const result = await window.electronAPI.config.export(exported);
+    if (result && result.success === false && !result.canceled) {
+      toastError('Export refused', result.error || 'Export failed');
+    }
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
@@ -1831,15 +1867,17 @@ function hideContextMenu() {
 }
 
 function openSSHFromContext() {
-  if (!contextMenuNode) return;
+  const node = contextMenuNode;
+  if (!node) return;
   hideContextMenu();
-  openSSHModal(contextMenuNode);
+  openSSHModal(node);
 }
 
 function editNodeFromContext() {
-  if (!contextMenuNode) return;
+  const node = contextMenuNode;
+  if (!node) return;
   hideContextMenu();
-  openNodeModal(contextMenuNode);
+  openNodeModal(node);
 }
 
 async function pingNodeFromContext() {
@@ -1949,20 +1987,30 @@ function closeModal(id) {
 // ============================================
 
 function openSSHModal(node) {
-  document.getElementById('ssh-host').value = node.address || '';
-  document.getElementById('ssh-port').value = node.sshPort || 22;
-  document.getElementById('ssh-username').value = node.sshUser || '';
-  document.getElementById('ssh-password').value = node.sshPass || '';
-  document.getElementById('ssh-node-id').value = node.id;
-
-  // Reset auth type and fields
-  document.getElementById('ssh-auth-type').value = 'password';
-  document.getElementById('ssh-key-path').value = '';
+  const source = (config.nodes || []).find((item) => item.id === node.id) || node;
+  const type = Topology.secretType(source);
+  const auth = source.sshAuth === 'key' || type === 'passphrase' ? 'key' : 'password';
+  document.getElementById('ssh-host').value = source.address || '';
+  document.getElementById('ssh-port').value = source.sshPort || 22;
+  document.getElementById('ssh-username').value = source.sshUser || '';
+  document.getElementById('ssh-password').value = '';
+  document.getElementById('ssh-node-id').value = source.id;
+  document.getElementById('ssh-auth-type').value = auth;
+  document.getElementById('ssh-key-path').value = source.sshKeyPath || '';
   document.getElementById('ssh-passphrase').value = '';
+  setSecretHint('ssh-password-hint', type === 'password' ? 'Secret saved. Leave blank to use it.' : '');
+  setSecretHint('ssh-passphrase-hint', type === 'passphrase' ? 'Secret saved. Leave blank to use it.' : '');
   toggleSSHAuthFields();
 
   openModal('ssh-modal');
   lucide.createIcons();
+}
+
+function setSecretHint(id, text) {
+  const hint = document.getElementById(id);
+  if (!hint) return;
+  hint.textContent = text || '';
+  hint.classList.toggle('hidden', !text);
 }
 
 function toggleSSHAuthFields() {
@@ -1992,6 +2040,33 @@ async function browseSSHKey() {
   }
 }
 
+async function rememberSecret(nodeId, changes) {
+  const node = (config.nodes || []).find((item) => item.id === nodeId);
+  if (!node) return { success: true };
+  let changed = false;
+  if (changes.password) {
+    node.sshAuth = 'password';
+    node.sshPass = changes.password;
+    delete node.sshPassphrase;
+    delete node.sshSecretClear;
+    changed = true;
+  }
+  if (changes.passphrase) {
+    node.sshAuth = 'key';
+    node.sshPassphrase = changes.passphrase;
+    delete node.sshPass;
+    delete node.sshSecretClear;
+    changed = true;
+  }
+  if (changes.keyPath && changes.keyPath !== node.sshKeyPath) {
+    node.sshAuth = 'key';
+    node.sshKeyPath = changes.keyPath;
+    changed = true;
+  }
+  if (!changed) return { success: true };
+  return saveConfig();
+}
+
 async function connectSSH() {
   if (!window.electronAPI) {
     toastWarning('SSH Unavailable', 'SSH is only available in the desktop application');
@@ -2012,13 +2087,21 @@ async function connectSSH() {
   // Build connection info based on auth type
   const connectionInfo = { nodeId, host, port, username };
 
+  const node = (config.nodes || []).find((item) => item.id === nodeId);
+  const storedType = Topology.secretType(node);
+
   if (authType === 'password') {
     const password = document.getElementById('ssh-password').value;
-    if (!password) {
+    if (password) {
+      connectionInfo.password = password;
+      const saved = await rememberSecret(nodeId, { password: password });
+      if (!saved || saved.success === false) {
+        toastError('Password not saved', (saved && saved.error) || 'The password was not saved');
+      }
+    } else if (storedType !== 'password') {
       toastError('Missing Password', 'Password is required');
       return;
     }
-    connectionInfo.password = password;
   } else {
     const keyPath = document.getElementById('ssh-key-path').value;
     if (!keyPath) {
@@ -2029,6 +2112,13 @@ async function connectSSH() {
     const passphrase = document.getElementById('ssh-passphrase').value;
     if (passphrase) {
       connectionInfo.passphrase = passphrase;
+    }
+    const saved = await rememberSecret(nodeId, {
+      passphrase: passphrase,
+      keyPath: keyPath
+    });
+    if (passphrase && (!saved || saved.success === false)) {
+      toastError('Password not saved', (saved && saved.error) || 'The key passphrase was not saved');
     }
   }
 
@@ -2231,7 +2321,15 @@ function openNodeModal(node = null) {
   document.getElementById('node-icon').value = node ? node.icon : 'circle';
   document.getElementById('node-ssh-port').value = node && node.sshPort ? node.sshPort : 22;
   document.getElementById('node-ssh-user').value = node ? node.sshUser || '' : '';
-  document.getElementById('node-ssh-pass').value = node ? node.sshPass || '' : '';
+  document.getElementById('node-ssh-pass').value = '';
+  document.getElementById('node-ssh-passphrase').value = '';
+  const secretType = Topology.secretType(node);
+  const sshAuth = node && (node.sshAuth === 'key' || secretType === 'passphrase') ? 'key' : 'password';
+  document.getElementById('node-ssh-auth').value = sshAuth;
+  document.getElementById('node-ssh-key-path').value = node && node.sshKeyPath ? node.sshKeyPath : '';
+  nodeSecretClear = false;
+  refreshNodeSecretHint(node);
+  toggleNodeSshAuth();
   const cable = node ? Topology.primaryCable(config, node.id) : null;
   document.getElementById('node-link-type').value = cable ? (cable.medium || '') : '';
   document.getElementById('node-link-speed').value = cable ? (cable.speed || '') : '';
@@ -2534,7 +2632,47 @@ function removeNodePort(idx) {
   renderNodePortsList();
 }
 
-function saveNode() {
+function toggleNodeSshAuth() {
+  const useKey = document.getElementById('node-ssh-auth').value === 'key';
+  document.getElementById('node-ssh-password-row').classList.toggle('hidden', useKey);
+  document.getElementById('node-ssh-key-row').classList.toggle('hidden', !useKey);
+}
+
+function refreshNodeSecretHint(node) {
+  const type = Topology.secretType(node);
+  setSecretHint(
+    'node-ssh-pass-hint',
+    nodeSecretClear ? 'Secret will be removed' : (type === 'password' ? 'Secret saved' : '')
+  );
+  setSecretHint(
+    'node-ssh-passphrase-hint',
+    nodeSecretClear ? 'Secret will be removed' : (type === 'passphrase' ? 'Secret saved' : '')
+  );
+  const clearButton = document.getElementById('node-ssh-secret-clear');
+  if (clearButton) {
+    clearButton.classList.toggle('hidden', nodeSecretClear || !type);
+  }
+}
+
+function clearNodeSecretField() {
+  nodeSecretClear = true;
+  document.getElementById('node-ssh-pass').value = '';
+  document.getElementById('node-ssh-passphrase').value = '';
+  refreshNodeSecretHint(null);
+}
+
+async function browseNodeSshKey() {
+  if (!window.electronAPI) {
+    toastWarning('Not Available', 'File browsing is only available in the desktop application');
+    return;
+  }
+  const result = await window.electronAPI.ssh.browseKey();
+  if (result && result.success) {
+    document.getElementById('node-ssh-key-path').value = result.path;
+  }
+}
+
+async function saveNode() {
   const id = document.getElementById('node-edit-id').value;
   const name = document.getElementById('node-name').value.trim();
   const address = document.getElementById('node-address').value.trim();
@@ -2545,7 +2683,10 @@ function saveNode() {
   const secondaryParentId = document.getElementById('node-secondary-parent').value || null;
   const sshPort = document.getElementById('node-ssh-port').value.trim();
   const sshUser = document.getElementById('node-ssh-user').value;
-  const sshPass = document.getElementById('node-ssh-pass').value;
+  const sshAuth = document.getElementById('node-ssh-auth').value === 'key' ? 'key' : 'password';
+  const typedPassword = document.getElementById('node-ssh-pass').value;
+  const typedPassphrase = document.getElementById('node-ssh-passphrase').value;
+  const sshKeyPath = document.getElementById('node-ssh-key-path').value.trim();
   const linkType = document.getElementById('node-link-type').value || null;
   const linkSpeed = document.getElementById('node-link-speed').value || null;
 
@@ -2576,7 +2717,7 @@ function saveNode() {
     icon,
     sshPort: sshPort ? parseInt(sshPort, 10) : 22,
     sshUser,
-    sshPass,
+    sshAuth,
     ports,
     isContainer,
     containerType: isContainer ? containerType : null,
@@ -2593,6 +2734,20 @@ function saveNode() {
   delete nodeData.uptime;
   delete nodeData.level;
   delete nodeData.responseTime;
+  delete nodeData.sshPass;
+  delete nodeData.sshPassphrase;
+  delete nodeData._encrypted;
+  delete nodeData.sshSecretClear;
+  if (sshKeyPath) nodeData.sshKeyPath = sshKeyPath;
+  else delete nodeData.sshKeyPath;
+  if (nodeSecretClear) {
+    delete nodeData.sshSecret;
+    nodeData.sshSecretClear = true;
+  } else if (sshAuth === 'key' && typedPassphrase) {
+    nodeData.sshPassphrase = typedPassphrase;
+  } else if (sshAuth !== 'key' && typedPassword) {
+    nodeData.sshPass = typedPassword;
+  }
   if (!previous) nodeData.expanded = true;
 
   // Save state for undo before making changes
@@ -2623,7 +2778,11 @@ function saveNode() {
   Topology.setParent(config, newNodeId, 'failover', secondaryParentId);
   Topology.setCable(config, newNodeId, linkType, linkSpeed);
 
-  saveConfig();
+  const saved = await saveConfig();
+  if (!saved || saved.success === false) {
+    toastError('Save refused', (saved && saved.error) || 'Save failed');
+    return;
+  }
   closeModal('node-modal');
   renderTree(config.nodes);
   renderHostList(config.nodes);
@@ -3153,6 +3312,13 @@ function setupMonitoringListener() {
       copy.status = entry ? entry.status : 'unknown';
       copy.responseTime = entry && entry.responseTime != null ? entry.responseTime : null;
       delete copy.activeParentId;
+      const secretType = Topology.secretType(copy);
+      if (secretType) copy.sshSecret = { type: secretType };
+      else delete copy.sshSecret;
+      delete copy.sshPass;
+      delete copy.sshPassphrase;
+      delete copy._encrypted;
+      delete copy.sshSecretClear;
 
       const state = Probe.canonicalStatus(copy.status);
       const tracker = uptimeTrackers.get(copy.id);
@@ -3584,12 +3750,18 @@ function updateSelectionVisuals() {
 // Undo/Redo System
 // ============================================
 
+function cloneNodesWithoutSecrets(nodes) {
+  const copy = JSON.parse(JSON.stringify(nodes || []));
+  copy.forEach((node) => Topology.stripNodeSecretValues(node));
+  return copy;
+}
+
 function saveStateForUndo(actionName = 'Change') {
   // Deep clone current state
   const state = {
     action: actionName,
     timestamp: Date.now(),
-    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    nodes: cloneNodesWithoutSecrets(config.nodes),
     links: JSON.parse(JSON.stringify(config.links))
   };
 
@@ -3616,7 +3788,7 @@ function undo() {
   const currentState = {
     action: 'Current',
     timestamp: Date.now(),
-    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    nodes: cloneNodesWithoutSecrets(config.nodes),
     links: JSON.parse(JSON.stringify(config.links))
   };
   redoStack.push(currentState);
@@ -3646,7 +3818,7 @@ function redo() {
   const currentState = {
     action: 'Current',
     timestamp: Date.now(),
-    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    nodes: cloneNodesWithoutSecrets(config.nodes),
     links: JSON.parse(JSON.stringify(config.links))
   };
   undoStack.push(currentState);

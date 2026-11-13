@@ -81,19 +81,35 @@ pub async fn connect(app: AppHandle, hub: Arc<Mutex<Hub>>, request: Value) -> Va
     {
         return failure("Invalid SSH host, port, or username");
     }
-    let password = request
-        .get("password")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let passphrase = request
-        .get("passphrase")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut password = non_empty_text(request.get("password"));
+    let mut passphrase = non_empty_text(request.get("passphrase"));
     let key_path = request
         .get("privateKeyPath")
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .map(str::to_string);
+    if key_path.is_none() && password.is_none() {
+        match crate::secrets::lookup(&node_id, crate::secrets::SecretKind::Password) {
+            Ok(Some(stored)) => password = Some(stored),
+            Ok(None) => {
+                return failure("No password is stored for this node. Enter it again.");
+            }
+            Err(error) => return failure(&error),
+        }
+    } else if let Some(path) = &key_path {
+        if passphrase.is_none() {
+            match crate::secrets::lookup(&node_id, crate::secrets::SecretKind::Passphrase) {
+                Ok(found) => passphrase = found,
+                Err(error) => match load_private_key(path, None) {
+                    Ok(_) => {}
+                    Err(read_error) if read_error == "Passphrase required" => {
+                        return failure(&error)
+                    }
+                    Err(read_error) => return failure(&read_error),
+                },
+            }
+        }
+    }
 
     let opened = open_shell(
         host.to_string(),
@@ -295,6 +311,13 @@ fn load_private_key(path: &str, passphrase: Option<&str>) -> Result<PrivateKey, 
     };
     key.decrypt(passphrase.as_bytes())
         .map_err(|_| "Failed to decrypt private key".to_string())
+}
+
+fn non_empty_text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn failure(error: &str) -> Value {

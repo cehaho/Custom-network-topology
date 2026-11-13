@@ -7,6 +7,7 @@
   let standaloneDocument = null;
   let dirty = false;
   let root = null;
+  let importToken = null;
 
   function current() {
     return hooks && hooks.getDocument ? hooks.getDocument() : standaloneDocument;
@@ -60,13 +61,21 @@
         const response = await fetch('config.json');
         if (response.ok) raw = await response.json();
       }
-      if (raw) {
+      if (raw && raw.success === false) {
+        alert(raw.error || 'The topology file was not changed');
+      } else if (raw) {
         const loaded = Topology.read(raw);
         if (!loaded.ok) {
           alert(loaded.error);
         } else {
           standaloneDocument = loaded.document;
-          if (loaded.changed && window.electronAPI) await window.electronAPI.config.save(standaloneDocument);
+          if (loaded.changed && window.electronAPI) {
+            const saved = await window.electronAPI.config.save(standaloneDocument, null);
+            if (saved && saved.success !== false && saved.config) {
+              const again = Topology.read(saved.config);
+              if (again.ok) standaloneDocument = again.document;
+            }
+          }
         }
       }
     } catch (error) {
@@ -224,7 +233,12 @@
               <input data-field="sshPort" data-index="${index}" value="${host.sshPort || 22}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-14 text-xs font-mono">
               <input data-field="sshUser" data-index="${index}" value="${escapeHtml(host.sshUser)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 flex-1 text-xs" placeholder="User">
             </div>
-            <input type="password" data-field="sshPass" data-index="${index}" value="${escapeHtml(host.sshPass)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-full text-xs" placeholder="Password">
+            <select data-field="sshAuth" data-index="${index}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-full text-xs">
+              <option value="password" ${host.sshAuth === 'key' ? '' : 'selected'}>Password</option>
+              <option value="key" ${host.sshAuth === 'key' ? 'selected' : ''}>Private key</option>
+            </select>
+            <input type="password" data-field="sshPass" data-index="${index}" value="" autocomplete="new-password" placeholder="${host.sshAuth === 'key' ? 'Key passphrase' : 'Password'}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-full text-xs">
+            ${secretLine(host, index)}
           </div>
         </td>
         <td class="p-3 align-top">
@@ -277,6 +291,15 @@
     return `<select data-field="${field}" data-index="${index}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs">${options}</select>`;
   }
 
+  function secretLine(host, index) {
+    const hint = Topology.secretHint(host);
+    if (!hint) return '';
+    const clear = Topology.secretType(host) && !host.sshSecretClear
+      ? `<button type="button" data-action="clear-secret" data-index="${index}" class="text-[10px] text-slate-400 hover:text-red-400 text-left">Clear saved secret</button>`
+      : '';
+    return `<p class="text-[10px] text-emerald-400">${escapeHtml(hint)}</p>${clear}`;
+  }
+
   function onField(event) {
     const doc = current();
     const index = Number(event.target.dataset.index);
@@ -293,6 +316,10 @@
       Topology.setCable(doc, host.id, medium, speed);
     } else if (field === 'port' || field === 'sshPort') {
       host[field] = value === '' ? null : parseInt(value, 10);
+    } else if (field === 'sshAuth') {
+      host.sshAuth = value === 'key' ? 'key' : 'password';
+    } else if (field === 'sshPass') {
+      Topology.acceptSecretEdit(host, value);
     } else {
       host[field] = value;
     }
@@ -305,6 +332,14 @@
     const index = Number(button.dataset.index);
     if (button.dataset.action === 'duplicate') duplicateRow(index);
     if (button.dataset.action === 'delete') removeRow(index);
+    if (button.dataset.action === 'clear-secret') {
+      const doc = current();
+      const host = doc && doc.nodes[index];
+      if (!host) return;
+      Topology.clearStoredSecret(host);
+      markDirty();
+      render();
+    }
   }
 
   function addRow() {
@@ -328,6 +363,7 @@
     const copy = JSON.parse(JSON.stringify(original));
     copy.id = id;
     copy.name = (original.name || 'Unnamed') + ' (copy)';
+    Topology.forgetInheritedSecret(copy);
     delete copy.primaryParentId;
     delete copy.secondaryParentId;
     delete copy.activeParentId;
@@ -382,16 +418,27 @@
       showToast(prepared.error, 'error');
       return false;
     }
-    standaloneDocument = prepared.document;
-    if (hooks && hooks.replaceDocument) hooks.replaceDocument(prepared.document);
     if (window.electronAPI) {
-      const result = await window.electronAPI.config.save(prepared.document);
+      const result = await window.electronAPI.config.save(prepared.document, importToken);
       if (!result || result.success === false) {
         showToast('Failed to save: ' + ((result && result.error) || 'unknown error'), 'error');
         return false;
       }
+      importToken = null;
+      if (result.config) {
+        const loaded = Topology.read(result.config);
+        if (loaded.ok) {
+          standaloneDocument = loaded.document;
+          if (hooks && hooks.replaceDocument) hooks.replaceDocument(loaded.document);
+        }
+      }
+    } else if (Topology.hasSecretValues(prepared.document)) {
+      showToast('The system keyring is unavailable. The password was not saved.', 'error');
+      return false;
     } else {
-      download(prepared.document);
+      standaloneDocument = Topology.withoutSecretValues(prepared.document);
+      if (hooks && hooks.replaceDocument) hooks.replaceDocument(standaloneDocument);
+      download(standaloneDocument);
     }
     dirty = false;
     showToast('Configuration saved', 'success');
@@ -404,8 +451,9 @@
       showToast(prepared.error, 'error');
       return;
     }
-    if (window.electronAPI) await window.electronAPI.config.export(prepared.document);
-    else download(prepared.document);
+    const exported = Topology.withoutSecretValues(prepared.document);
+    if (window.electronAPI) await window.electronAPI.config.export(exported);
+    else download(exported);
   }
 
   async function importDocument() {
@@ -431,7 +479,12 @@
         alert(loaded.error);
         return null;
       }
-      if (!window.confirm(Topology.importMessage(loaded.document))) return null;
+      if (!window.confirm(Topology.importMessage(loaded.document))) {
+        importToken = null;
+        if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+        return null;
+      }
+      importToken = result.importToken || null;
       return loaded.document;
     }
     return new Promise((resolve) => {
@@ -452,6 +505,13 @@
               alert(loaded.error);
               resolve(null);
               return;
+            }
+            if (Topology.hasSecretValues(loaded.document)) {
+              alert('Passwords in this file were not imported. The system keyring is unavailable, so they were not saved.');
+              loaded.document = Topology.withoutSecretValues(loaded.document);
+              (loaded.document.nodes || []).forEach((node) => {
+                delete node.sshSecret;
+              });
             }
             if (!window.confirm(Topology.importMessage(loaded.document))) {
               resolve(null);
