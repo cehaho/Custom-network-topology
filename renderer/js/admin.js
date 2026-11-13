@@ -98,6 +98,11 @@
                 <input type="checkbox" id="snapToGridCheck" class="w-4 h-4 rounded bg-slate-700 border-slate-500">
                 Snap to Grid
               </label>
+              <label class="flex items-center gap-2 text-sm text-slate-300">
+                Probe
+                <input type="number" id="probeIntervalSeconds" min="1" max="60" step="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">
+                s
+              </label>
             </div>
             <button id="admin-import" class="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm">
               <i data-lucide="upload" class="w-4 h-4"></i> Import
@@ -152,6 +157,18 @@
     });
     document.getElementById('snapToGridCheck').addEventListener('change', (event) => {
       current().settings.snapToGrid = event.target.checked;
+      markDirty();
+    });
+    const intervalInput = document.getElementById('probeIntervalSeconds');
+    const intervalMs = Probe.monitoringInterval(settings.probeIntervalMs);
+    intervalInput.value = String(intervalMs / 1000);
+    intervalInput.addEventListener('change', (event) => {
+      const seconds = Number(event.target.value);
+      const ms = Probe.monitoringInterval(Number.isFinite(seconds) ? seconds * 1000 : NaN);
+      const doc = current();
+      if (!doc.settings || typeof doc.settings !== 'object') doc.settings = {};
+      doc.settings.probeIntervalMs = ms;
+      event.target.value = String(ms / 1000);
       markDirty();
     });
     document.getElementById('admin-back').addEventListener('click', () => {

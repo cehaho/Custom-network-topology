@@ -31,7 +31,9 @@ fn default_settings() -> Value {
         "showGrid": true,
         "gridSize": 100,
         "snapToGrid": true,
-        "theme": "dark"
+        "theme": "dark",
+        "probeIntervalMs": 5000,
+        "confirmations": 2
     })
 }
 
@@ -186,6 +188,14 @@ fn normalize_settings(value: Option<&Value>) -> Value {
             settings.insert(key.clone(), item.clone());
         }
     }
+    let interval = crate::hosts::monitoring_interval(
+        settings.get("probeIntervalMs").and_then(Value::as_f64),
+    );
+    let confirmations = crate::hosts::confirmation_count(
+        settings.get("confirmations").and_then(Value::as_f64),
+    );
+    settings.insert("probeIntervalMs".to_string(), json!(interval));
+    settings.insert("confirmations".to_string(), json!(confirmations));
     Value::Object(settings)
 }
 
@@ -607,6 +617,7 @@ mod tests {
         assert_eq!(document["settings"]["showGrid"], false);
         assert_eq!(document["settings"]["theme"], "light");
         assert_eq!(document["settings"]["probeIntervalMs"], 5000);
+        assert_eq!(document["settings"]["confirmations"], 2);
         assert_eq!(document["settings"]["snapToGrid"], true);
         assert_eq!(document["links"].as_array().unwrap().len(), 1);
         assert_eq!(document["links"][0]["id"], "kept");
@@ -639,6 +650,24 @@ mod tests {
         }
         let again = read_document(document).unwrap();
         assert!(again["nodes"][0].get("primaryParentId").is_none());
+    }
+
+    #[test]
+    fn probe_settings_fall_back_to_five_seconds_and_two_confirmations() {
+        let prepared = read_document(json!({
+            "nodes": [],
+            "settings": { "probeIntervalMs": 50, "confirmations": 1 }
+        }))
+        .unwrap();
+        assert_eq!(prepared["settings"]["probeIntervalMs"], 5000);
+        assert_eq!(prepared["settings"]["confirmations"], 2);
+        let kept = read_document(json!({
+            "nodes": [],
+            "settings": { "probeIntervalMs": 2000, "confirmations": 4 }
+        }))
+        .unwrap();
+        assert_eq!(kept["settings"]["probeIntervalMs"], 2000);
+        assert_eq!(kept["settings"]["confirmations"], 4);
     }
 
     #[test]

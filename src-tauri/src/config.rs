@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::topology;
 use aes_gcm::aead::{Aead, Generate};
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
 use base64::Engine;
@@ -159,6 +160,26 @@ fn read_config_file(path: &Path) -> Result<Value, String> {
     }
     let parsed = serde_json::from_str(&body).map_err(|error| error.to_string())?;
     topology::read_document(parsed)
+}
+
+pub fn read_status(app: &AppHandle) -> Value {
+    let Ok(path) = status_path(app) else {
+        return json!({ "nodes": {} });
+    };
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return json!({ "nodes": {} });
+    };
+    serde_json::from_str(&body).unwrap_or_else(|_| json!({ "nodes": {} }))
+}
+
+pub fn write_status(app: &AppHandle, value: &Value) -> Result<(), String> {
+    let path = status_path(app)?;
+    let body = serde_json::to_string(value).map_err(|error| error.to_string())?;
+    write_atomic(&path, &body)
+}
+
+fn status_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_config_path(app)?.with_file_name("status.json"))
 }
 
 fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, String> {

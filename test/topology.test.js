@@ -139,6 +139,7 @@ test('a save keeps links, ports, containers, and zones', () => {
   assert.equal(prepared.document.settings.showGrid, false);
   assert.equal(prepared.document.settings.theme, 'light');
   assert.equal(prepared.document.settings.probeIntervalMs, 5000);
+  assert.equal(prepared.document.settings.confirmations, 2);
   assert.equal(prepared.document.settings.snapToGrid, true);
   assert.equal(prepared.document.links.length, 1);
   assert.equal(prepared.document.links[0].id, 'kept');
@@ -206,6 +207,21 @@ test('migrated links attach to ports that exist on the nodes', () => {
   }
   const again = Topology.read(loaded.document);
   assert.equal(again.changed, false);
+});
+
+test('probe settings fall back to five seconds and two confirmations', () => {
+  const prepared = Topology.prepare({
+    nodes: [],
+    settings: { probeIntervalMs: 50, confirmations: 1 }
+  });
+  assert.equal(prepared.document.settings.probeIntervalMs, 5000);
+  assert.equal(prepared.document.settings.confirmations, 2);
+  const kept = Topology.prepare({
+    nodes: [],
+    settings: { probeIntervalMs: 2000, confirmations: 4 }
+  });
+  assert.equal(kept.document.settings.probeIntervalMs, 2000);
+  assert.equal(kept.document.settings.confirmations, 4);
 });
 
 test('the sample file is the shared document', () => {

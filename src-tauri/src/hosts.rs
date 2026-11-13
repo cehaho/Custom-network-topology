@@ -60,7 +60,18 @@ pub fn ping_args(host: &str, windows: bool) -> Vec<String> {
 pub fn monitoring_interval(requested: Option<f64>) -> u64 {
     match requested {
         Some(value) if value.is_finite() && (1000.0..=60_000.0).contains(&value) => value as u64,
-        _ => 2000,
+        _ => 5000,
+    }
+}
+
+pub fn confirmation_count(requested: Option<f64>) -> u64 {
+    match requested {
+        Some(value)
+            if value.is_finite() && value.fract() == 0.0 && (2.0..=10.0).contains(&value) =>
+        {
+            value as u64
+        }
+        _ => 2,
     }
 }
 
@@ -167,9 +178,13 @@ mod tests {
     #[test]
     fn clamps_the_monitoring_interval() {
         assert_eq!(monitoring_interval(Some(2000.0)), 2000);
-        assert_eq!(monitoring_interval(Some(50.0)), 2000);
-        assert_eq!(monitoring_interval(None), 2000);
+        assert_eq!(monitoring_interval(Some(50.0)), 5000);
+        assert_eq!(monitoring_interval(None), 5000);
         assert_eq!(monitoring_interval(Some(60_000.0)), 60_000);
-        assert_eq!(monitoring_interval(Some(f64::NAN)), 2000);
+        assert_eq!(monitoring_interval(Some(f64::NAN)), 5000);
+        assert_eq!(confirmation_count(None), 2);
+        assert_eq!(confirmation_count(Some(1.0)), 2);
+        assert_eq!(confirmation_count(Some(4.0)), 4);
+        assert_eq!(confirmation_count(Some(2.5)), 2);
     }
 }

@@ -32,7 +32,9 @@
       showGrid: true,
       gridSize: 100,
       snapToGrid: true,
-      theme: 'dark'
+      theme: 'dark',
+      probeIntervalMs: 5000,
+      confirmations: 2
     };
   }
 
@@ -172,7 +174,22 @@
 
   function normalizeSettings(raw) {
     const source = isObject(raw) ? raw : {};
-    return Object.assign(defaultSettings(), source);
+    const settings = Object.assign(defaultSettings(), source);
+    settings.probeIntervalMs = clampInterval(settings.probeIntervalMs);
+    settings.confirmations = clampConfirmations(settings.confirmations);
+    return settings;
+  }
+
+  function clampInterval(requested) {
+    const value = Number(requested);
+    if (Number.isFinite(value) && value >= 1000 && value <= 60000) return value;
+    return 5000;
+  }
+
+  function clampConfirmations(requested) {
+    const value = Number(requested);
+    if (Number.isInteger(value) && value >= 2 && value <= 10) return value;
+    return 2;
   }
 
   function attachDetachedPorts(nodes, ports) {

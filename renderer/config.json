@@ -4,7 +4,9 @@
     "showGrid": true,
     "gridSize": 100,
     "snapToGrid": true,
-    "theme": "dark"
+    "theme": "dark",
+    "probeIntervalMs": 5000,
+    "confirmations": 2
   },
   "nodes": [
     {

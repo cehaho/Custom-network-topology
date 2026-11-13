@@ -454,6 +454,10 @@
       background: rgba(239, 68, 68, 0.15);
       color: #ef4444;
     }
+    .container-status.unknown {
+      background: rgba(148, 163, 184, 0.15);
+      color: #94a3b8;
+    }
     .container-subtitle {
       font-size: 10px;
       color: var(--text-muted);
@@ -608,6 +612,10 @@
     .child-node-status.offline {
       background: rgba(239, 68, 68, 0.15);
       color: #ef4444;
+    }
+    .child-node-status.unknown {
+      background: rgba(148, 163, 184, 0.15);
+      color: #94a3b8;
     }
 
     /* VLAN Zones inside containers */
@@ -799,6 +807,7 @@
         <option value="all">All Status</option>
         <option value="online">Online</option>
         <option value="offline">Offline</option>
+        <option value="unknown">Unknown</option>
       </select>
     </div>
 
@@ -1159,6 +1168,7 @@
 <script src="vendor/xterm/xterm.js"></script>
 <script src="vendor/xterm-addon-fit/xterm-addon-fit.js"></script>
 <script src="js/topology.js"></script>
+<script src="js/probe.js"></script>
 <script src="js/desktop.js"></script>
 <script src="js/admin.js"></script>
 <script src="js/app.js"></script>
