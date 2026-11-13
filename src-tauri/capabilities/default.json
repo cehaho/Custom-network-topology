@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "enables the default permissions",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-config-load",
+    "allow-config-save",
+    "allow-config-export",
+    "allow-config-import",
+    "allow-ssh-browse-key",
+    "allow-ssh-connect",
+    "allow-ssh-write",
+    "allow-ssh-resize",
+    "allow-ssh-disconnect",
+    "allow-network-local-info",
+    "allow-network-ping",
+    "allow-network-scan",
+    "allow-network-arp",
+    "allow-monitor-start",
+    "allow-monitor-stop"
+  ]
+}

@@ -67,29 +67,33 @@ async function init() {
   // Initialize minimap
   initMinimap();
 
-  // Check if running in Electron
-  if (window.electronAPI) {
-    console.log('Running in Electron');
-    startMonitoring();
-  } else {
-    console.log('Running in browser - monitoring disabled');
+  if (window.electronAPI) startMonitoring();
+}
+
+function normalizeLoadedConfig(raw) {
+  if (Array.isArray(raw)) {
+    return {
+      settings: { showGrid: true, gridSize: 100, snapToGrid: true },
+      nodes: raw,
+      connections: []
+    };
   }
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    settings: { showGrid: true, gridSize: 100, snapToGrid: true, ...(source.settings || {}) },
+    nodes: Array.isArray(source.nodes) ? source.nodes : [],
+    connections: Array.isArray(source.connections) ? source.connections : []
+  };
 }
 
 async function loadConfig() {
   try {
     if (window.electronAPI) {
-      config = await window.electronAPI.config.load();
+      config = normalizeLoadedConfig(await window.electronAPI.config.load());
     } else {
-      // Fallback for browser testing
       const res = await fetch('config.json');
-      if (res.ok) config = await res.json();
+      if (res.ok) config = normalizeLoadedConfig(await res.json());
     }
-
-    // Ensure settings exist
-    config.settings = config.settings || { showGrid: true, gridSize: 100, snapToGrid: true };
-    config.nodes = config.nodes || [];
-    config.connections = config.connections || [];
 
     // Migrate legacy data and ensure ports exist
     migrateAndInitializePorts();
@@ -389,15 +393,21 @@ function setupEventListeners() {
   document.getElementById('btn-snap').addEventListener('click', toggleSnapToGrid);
 
   document.getElementById('btn-import').addEventListener('click', async () => {
-    if (window.electronAPI) {
-      const result = await window.electronAPI.config.import();
-      if (result.success) {
-        config = result.config;
-        config.settings = config.settings || { showGrid: true, gridSize: 100, snapToGrid: true };
-        renderTree(config.nodes);
-        renderHostList(config.nodes);
-      }
+    if (!window.electronAPI) return;
+    const result = await window.electronAPI.config.import();
+    if (!result.success || !result.config) return;
+
+    config = normalizeLoadedConfig(result.config);
+    migrateAndInitializePorts();
+    updateSnapButton();
+    if (monitoringActive) {
+      await stopMonitoring();
+      await startMonitoring();
+    } else {
+      renderTree(config.nodes);
+      renderHostList(config.nodes);
     }
+    toastSuccess('Configuration imported', `${config.nodes.length} nodes loaded`);
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
@@ -542,11 +552,11 @@ function renderTree(nodes) {
   function generateIconHtml(node) {
     if (node.iconType === 'url') {
       return `<img src="${escapeHtml(node.icon || '')}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
-    } else if (node.iconType === 'svg') {
-      return node.icon || '<i data-lucide="help-circle" class="w-8 h-8"></i>';
-    } else {
-      return `<i data-lucide="${escapeHtml(node.icon || 'circle')}" class="w-8 h-8"></i>`;
     }
+    if (node.iconType === 'svg') {
+      return sanitizeSvg(node.icon) || '<i data-lucide="help-circle" class="w-8 h-8"></i>';
+    }
+    return `<i data-lucide="${safeLucideName(node.icon)}" class="w-8 h-8"></i>`;
   }
 
   // Separate containers from regular nodes
@@ -558,7 +568,7 @@ function renderTree(nodes) {
   containerNodes.forEach(node => {
     const el = document.createElement('div');
     el.id = `node-${node.id}`;
-    el.className = `node-container card is-container container-${node.containerType || 'custom'}`;
+    el.className = `node-container card is-container container-${safeContainerType(node.containerType)}`;
     el.dataset.nodeId = node.id;
     el.dataset.isContainer = 'true';
 
@@ -629,14 +639,14 @@ function renderTree(nodes) {
         // Group children by zones
         zones.forEach(zone => {
           const zoneChildren = children.filter(c => c.zoneId === zone.id);
-          const unassignedChildren = children.filter(c => !c.zoneId && zone === zones[0]);
+          const zoneColor = safeCssColor(zone.color);
 
           childrenHtml += `
-            <div class="vlan-zone" data-zone-id="${zone.id}">
-              <div class="vlan-zone-header" onclick="toggleZoneCollapse('${node.id}', '${zone.id}')">
+            <div class="vlan-zone" data-zone-id="${escapeHtml(zone.id)}">
+              <div class="vlan-zone-header" onclick="toggleZoneCollapse('${jsAttr(node.id)}', '${jsAttr(zone.id)}')">
                 <div class="vlan-zone-header-left">
-                  <span class="vlan-zone-badge" style="background: ${zone.color}20; color: ${zone.color}; border: 1px solid ${zone.color}40;">
-                    VLAN ${zone.vlanId}
+                  <span class="vlan-zone-badge" style="background: ${zoneColor}20; color: ${zoneColor}; border: 1px solid ${zoneColor}40;">
+                    VLAN ${escapeHtml(zone.vlanId)}
                   </span>
                   <span class="vlan-zone-name">${escapeHtml(zone.name)}</span>
                 </div>
@@ -1722,7 +1732,7 @@ function showNodeContextMenu(e, node) {
   if (!node.isContainer && !node.containerId && containers.length > 0) {
     addToContainerSection.classList.remove('hidden');
     addToContainerItems.innerHTML = containers.map(c => `
-      <div class="context-menu-item" onclick="addToContainerFromContext('${c.id}')">
+      <div class="context-menu-item" onclick="addToContainerFromContext('${jsAttr(c.id)}')">
         <i data-lucide="log-in" class="w-4 h-4"></i>
         <span>Add to ${escapeHtml(c.name)}</span>
       </div>
@@ -1975,14 +1985,16 @@ function createTerminalTab(nodeId, host) {
   tab.dataset.nodeId = nodeId;
   tab.innerHTML = `
     <span>${escapeHtml(host)}</span>
-    <button class="close-btn text-slate-500 hover:text-red-400" onclick="closeTerminalTab('${nodeId}')">
+    <button class="close-btn text-slate-500 hover:text-red-400" type="button">
       <i data-lucide="x" class="w-3 h-3"></i>
     </button>
   `;
   tab.addEventListener('click', (e) => {
-    if (!e.target.closest('.close-btn')) {
-      switchTerminal(nodeId);
+    if (e.target.closest('.close-btn')) {
+      closeTerminalTab(nodeId);
+      return;
     }
+    switchTerminal(nodeId);
   });
 
   // Deactivate other tabs
@@ -2003,11 +2015,17 @@ function createTerminalTab(nodeId, host) {
   lucide.createIcons();
 }
 
+function sendTerminalSize(nodeId, term) {
+  if (!window.electronAPI || !term) return;
+  const cols = term.cols;
+  const rows = term.rows;
+  if (!Number.isInteger(cols) || !Number.isInteger(rows)) return;
+  window.electronAPI.ssh.resize(nodeId, cols, rows);
+}
+
 async function initTerminal(nodeId, container) {
-  // Load xterm dynamically if not in Electron
   if (typeof Terminal === 'undefined') {
-    // Terminal will be initialized when xterm is loaded
-    terminals.set(nodeId, { container, pending: true });
+    toastError('Terminal unavailable', 'xterm.js did not load. Run npm install, then restart the app.');
     return;
   }
 
@@ -2025,24 +2043,27 @@ async function initTerminal(nodeId, container) {
 
   term.open(container);
 
-  // Handle terminal input
   term.onData(data => {
     if (window.electronAPI) {
       window.electronAPI.ssh.write(nodeId, data);
     }
   });
 
-  // Fit terminal to container
-  if (window.FitAddon) {
-    const fitAddon = new FitAddon.FitAddon();
+  let onResize = null;
+  const FitConstructor = window.FitAddon && window.FitAddon.FitAddon;
+  if (typeof FitConstructor === 'function') {
+    const fitAddon = new FitConstructor();
     term.loadAddon(fitAddon);
-    fitAddon.fit();
-
-    // Resize on window resize
-    window.addEventListener('resize', () => fitAddon.fit());
+    onResize = () => {
+      if (!terminals.has(nodeId)) return;
+      fitAddon.fit();
+      sendTerminalSize(nodeId, term);
+    };
+    requestAnimationFrame(onResize);
+    window.addEventListener('resize', onResize);
   }
 
-  terminals.set(nodeId, { term, container });
+  terminals.set(nodeId, { term, container, onResize });
   activeTerminal = nodeId;
 }
 
@@ -2061,25 +2082,25 @@ function switchTerminal(nodeId) {
 }
 
 async function closeTerminalTab(nodeId) {
+  const tabs = document.getElementById('terminal-tabs');
+  const tab = [...tabs.querySelectorAll('.terminal-tab')].find((item) => item.dataset.nodeId === nodeId);
+  const termDiv = document.getElementById(`terminal-${nodeId}`);
+  const termData = terminals.get(nodeId);
+  if (!tab && !termDiv && !termData) return;
+
+  terminals.delete(nodeId);
+  if (termData && termData.onResize) {
+    window.removeEventListener('resize', termData.onResize);
+  }
+  if (termData && termData.term) {
+    termData.term.dispose();
+  }
   if (window.electronAPI) {
     await window.electronAPI.ssh.disconnect(nodeId);
   }
 
-  // Remove tab
-  const tabs = document.getElementById('terminal-tabs');
-  const tab = tabs.querySelector(`[data-node-id="${nodeId}"]`);
   if (tab) tab.remove();
-
-  // Remove terminal instance
-  const termDiv = document.getElementById(`terminal-${nodeId}`);
   if (termDiv) termDiv.remove();
-
-  // Clean up terminal
-  const termData = terminals.get(nodeId);
-  if (termData && termData.term) {
-    termData.term.dispose();
-  }
-  terminals.delete(nodeId);
 
   // Show placeholder if no terminals left
   if (terminals.size === 0) {
@@ -2292,19 +2313,21 @@ function renderContainerZonesList() {
   }
 
   let html = '';
-  editingContainerZones.forEach((zone, idx) => {
+  editingContainerZones.forEach((zone) => {
+    const zoneColor = safeCssColor(zone.color);
+    const zoneDomId = jsAttr(zone.id);
     html += `
       <div class="flex items-center gap-2 p-2 bg-slate-800 rounded mb-2">
-        <input type="color" value="${zone.color}"
-               onchange="updateContainerZone('${zone.id}', 'color', this.value)"
+        <input type="color" value="${zoneColor}"
+               onchange="updateContainerZone('${zoneDomId}', 'color', this.value)"
                class="w-8 h-8 rounded cursor-pointer border-0" style="padding: 0;">
-        <input type="number" value="${zone.vlanId}" placeholder="VLAN ID"
-               onchange="updateContainerZone('${zone.id}', 'vlanId', this.value)"
+        <input type="number" value="${escapeHtml(zone.vlanId)}" placeholder="VLAN ID"
+               onchange="updateContainerZone('${zoneDomId}', 'vlanId', this.value)"
                class="w-20 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
         <input type="text" value="${escapeHtml(zone.name)}" placeholder="Zone name"
-               onchange="updateContainerZone('${zone.id}', 'name', this.value)"
+               onchange="updateContainerZone('${zoneDomId}', 'name', this.value)"
                class="flex-1 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
-        <button onclick="removeContainerZone('${zone.id}')" class="p-1 text-red-400 hover:text-red-300">
+        <button onclick="removeContainerZone('${zoneDomId}')" class="p-1 text-red-400 hover:text-red-300">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
       </div>
@@ -2453,30 +2476,7 @@ function saveNode() {
   const containerId = document.getElementById('node-parent-container').value || null;
   const zoneId = document.getElementById('node-zone')?.value || null;
 
-  // Validation first (before saving undo state)
-  if (!name) {
-    toastError('Validation Error', 'Node name is required');
-    document.getElementById('node-name').focus();
-    return;
-  }
-
-  if (address && !isValidHostname(address)) {
-    toastError('Validation Error', 'Invalid IP address or hostname');
-    document.getElementById('node-address').focus();
-    return;
-  }
-
-  if (port && !isValidPort(port)) {
-    toastError('Validation Error', 'Port must be between 1 and 65535');
-    document.getElementById('node-port').focus();
-    return;
-  }
-
-  if (sshPort && !isValidPort(sshPort)) {
-    toastError('Validation Error', 'SSH port must be between 1 and 65535');
-    document.getElementById('node-ssh-port').focus();
-    return;
-  }
+  if (!validateNodeForm()) return;
 
   const newNodeId = id || 'node_' + Date.now();
 
@@ -2519,6 +2519,9 @@ function saveNode() {
     if (idx !== -1) {
       nodeData.x = config.nodes[idx].x;
       nodeData.y = config.nodes[idx].y;
+      if (typeof config.nodes[idx].expanded === 'boolean') {
+        nodeData.expanded = config.nodes[idx].expanded;
+      }
       config.nodes[idx] = nodeData;
     }
   } else {
@@ -2623,12 +2626,16 @@ function updateDiscoveryRange() {
 async function startNetworkScan() {
   if (!window.electronAPI) return;
 
-  const baseIp = document.getElementById('discovery-base').value;
-  const startRange = parseInt(document.getElementById('discovery-start').value) || 1;
-  const endRange = parseInt(document.getElementById('discovery-end').value) || 254;
+  const baseIp = document.getElementById('discovery-base').value.trim();
+  const startRange = parseInt(document.getElementById('discovery-start').value, 10);
+  const endRange = parseInt(document.getElementById('discovery-end').value, 10);
 
   if (!baseIp) {
     toastError('Missing Input', 'Please enter a base IP address');
+    return;
+  }
+  if (!Number.isInteger(startRange) || !Number.isInteger(endRange) || startRange < 1 || endRange > 254 || startRange > endRange) {
+    toastError('Invalid range', 'Scan range must be between 1 and 254');
     return;
   }
 
@@ -2646,8 +2653,16 @@ async function startNetworkScan() {
     document.getElementById('discovery-text').textContent = `Scanning... ${progress.current}/${progress.total} (Found: ${progress.found})`;
   });
 
-  // Start scan
-  const results = await window.electronAPI.network.scan(baseIp, startRange, endRange);
+  let results;
+  try {
+    results = await window.electronAPI.network.scan(baseIp, startRange, endRange);
+  } catch (error) {
+    removeProgressListener();
+    document.getElementById('btn-start-scan').classList.remove('hidden');
+    document.getElementById('discovery-text').textContent = 'Scan failed';
+    toastError('Scan failed', error && error.message ? error.message : 'Invalid scan range');
+    return;
+  }
 
   removeProgressListener();
 
@@ -3039,6 +3054,7 @@ function setupMonitoringListener() {
 
   window.electronAPI.monitor.onStatus((data) => {
     document.getElementById('last-updated').textContent = 'Last Update: ' + data.updated;
+    const statusById = new Map((data.nodes || []).map((node) => [node.id, node.status === true]));
 
     // Merge monitoring data with current config positions
     // This preserves user-moved positions while updating status
@@ -3051,6 +3067,11 @@ function setupMonitoringListener() {
         node.port = configNode.port;
         node.primaryParentId = configNode.primaryParentId;
         node.secondaryParentId = configNode.secondaryParentId;
+        const primaryUp = configNode.primaryParentId ? statusById.get(configNode.primaryParentId) === true : false;
+        const secondaryUp = configNode.secondaryParentId ? statusById.get(configNode.secondaryParentId) === true : false;
+        node.activeParentId = (!primaryUp && secondaryUp)
+          ? configNode.secondaryParentId
+          : (configNode.primaryParentId || null);
         node.x = configNode.x;
         node.y = configNode.y;
         node.icon = configNode.icon;
@@ -3182,25 +3203,6 @@ function trackStatusChange(nodeId, nodeName, newStatus) {
   }
 }
 
-function getNodeStatusHistory(nodeId) {
-  return statusHistory.get(nodeId) || null;
-}
-
-function formatStatusHistory(nodeId) {
-  const history = statusHistory.get(nodeId);
-  if (!history || history.history.length === 0) {
-    return 'No history available';
-  }
-
-  // Get last 5 status changes
-  const recent = history.history.slice(-5).reverse();
-  return recent.map(entry => {
-    const time = new Date(entry.time).toLocaleTimeString();
-    const status = entry.status ? '🟢 Online' : '🔴 Offline';
-    return `${time}: ${status}`;
-  }).join('\n');
-}
-
 function getLastStatusChange(nodeId) {
   const history = statusHistory.get(nodeId);
   if (!history) return null;
@@ -3218,7 +3220,48 @@ function getLastStatusChange(nodeId) {
 // ============================================
 
 function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeJs(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\r/g, '')
+    .replace(/\n/g, '');
+}
+
+function jsAttr(value) {
+  return escapeHtml(escapeJs(value));
+}
+
+function safeLucideName(name) {
+  return /^[a-z0-9-]+$/i.test(name || '') ? name : 'circle';
+}
+
+function safeContainerType(type) {
+  const allowed = ['proxmox', 'docker', 'kubernetes', 'vmware', 'rack', 'cloud', 'custom'];
+  return allowed.includes(type) ? type : 'custom';
+}
+
+function safeCssColor(color) {
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color || '') ? color : '#64748b';
+}
+
+function sanitizeSvg(svg) {
+  if (typeof svg !== 'string') return '';
+  const trimmed = svg.trim();
+  if (!trimmed.startsWith('<svg') || !trimmed.endsWith('</svg>')) return '';
+  if (/<script|<\/script|on\w+\s*=|javascript:|data:/i.test(trimmed)) return '';
+  return trimmed;
 }
 
 function togglePanel(id) {

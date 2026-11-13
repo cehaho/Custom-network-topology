@@ -1,140 +1,75 @@
 # Network Topology Manager
 
-An Electron-based network topology visualization and management application with SSH terminal integration, network discovery, and real-time monitoring.
+Desktop app for drawing a network topology, watching whether hosts answer, and opening an SSH terminal on a node. The window is a static page. Tauri hosts it and runs ping, ARP, and SSH.
 
-![Network Topology](https://github.com/user-attachments/assets/a6ba412f-bffe-494c-b081-bce053920e18)
+The sample layout is four hosts: a gateway, the Internet (`8.8.8.8`), a NAS, and a workstation. Your real topology is saved outside the repository.
 
-## Features
+## What you need
 
-- **Interactive Topology Viewer** - Zoom, pan, and drag nodes to create custom network layouts
-- **Real-time Monitoring** - Cross-platform monitoring using Node.js (replaces PowerShell)
-- **SSH Terminal** - Integrated xterm.js terminal for direct SSH connections to nodes
-- **Network Discovery** - Automatic network scanning to discover devices via ping and ARP
-- **Snap-to-Grid** - Precise node positioning with A-Z/1-50 coordinate system
-- **Failover Support** - Visual representation of primary and failover connections
-- **Import/Export** - Save and load topology configurations as JSON
+- Node.js 18 or newer
+- npm
+- Rust stable (1.90 or newer) and Cargo
+- On Linux, WebKitGTK 4.1 and GTK 3 development libraries
+- A network connection the first time the window opens. The interface loads Tailwind CSS and Lucide icons from their CDNs. The SSH terminal itself is copied from `node_modules` at install time and does not use a CDN.
 
-## Screenshots
-
-### Topology Viewer
-The main interface displays your network topology with real-time status updates, animated connection flows, and a host status panel.
-
-### Admin Panel
-![Admin Panel](https://github.com/user-attachments/assets/246432e6-90ce-47be-a8b8-7339caeba225)
-
-Configure nodes, SSH credentials, parent relationships, and grid positions.
-
-## Installation
-
-### Prerequisites
-- [Node.js](https://nodejs.org/) v18 or later
-- [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
-
-### Setup
+## Run
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-repo/Custom-network-topology.git
+git clone https://github.com/cehaho/Custom-network-topology.git
 cd Custom-network-topology
-
-# Install dependencies
 npm install
-
-# Start the application
 npm start
-
-# Development mode with DevTools
-npm run dev
 ```
 
-### Building for Distribution
+`npm run dev` is the same command. `npm run build` packages the app for the operating system you are on.
 
-```bash
-# Build for current platform
-npm run build
+`npm test` checks host validation in JavaScript and Rust. It does not open a window.
 
-# Build for specific platforms
-npm run build:win    # Windows
-npm run build:mac    # macOS
-npm run build:linux  # Linux
-```
+## What the window does
 
-## Project Structure
+- Drag nodes, pan the background, and zoom with the scroll wheel.
+- Admin edits names, addresses, parents, link type, and SSH credentials. Saving keeps ports, containers, VLAN zones, and connections that the canvas created.
+- Discover pings an IPv4 range (1–254) and reads the local ARP table.
+- Monitoring pings each node, or opens a TCP connection when the node has a port. A secondary parent is shown as the active parent only when the primary parent is down and the secondary parent is up.
+- Right-click a node to open an SSH session in the side panel. Password and private-key login are both supported. OpenSSH keys and PuTTY `.ppk` files are accepted.
+- Import and export the topology as JSON. An exported file contains SSH passwords in clear text and is written so that only your user can read it.
+
+## Where the topology is stored
+
+If you already used the Electron build, the app keeps using that file:
+
+- Linux: `~/.config/custom-network-topology/config.json`
+- macOS: `~/Library/Application Support/custom-network-topology/config.json`
+- Windows: `%APPDATA%\custom-network-topology\config.json`
+
+A new install uses Tauri's config directory for `com.custom.network-topology`. The first launch copies `renderer/config.json` there.
+
+Passwords in that file are encrypted with AES-256-GCM. The key lives in the OS keyring under the service `custom-network-topology`. If the keyring cannot be used, the password is stored as plain text and is not marked encrypted. A password written by Electron's safe storage is left untouched: this app cannot decrypt it, and saving again does not wrap that value a second time.
+
+## Project layout
 
 ```
 Custom-network-topology/
-├── main.js              # Electron main process
-├── preload.js           # Secure IPC bridge
-├── package.json         # Project configuration
-├── renderer/            # Frontend files
-│   ├── index.html       # Main topology viewer
-│   ├── admin.html       # Configuration editor
-│   ├── config.json      # Default configuration
-│   ├── css/
-│   │   └── xterm.css    # Terminal styles
+├── src-tauri/              # Tauri commands: config, SSH, ping, scan, monitoring
+├── lib/hosts.js            # Host, port, and scan-range checks (mirrored in Rust)
+├── renderer/
+│   ├── index.html          # Topology window
+│   ├── admin.html          # Node editor
+│   ├── config.json         # Sample topology copied on first launch
 │   └── js/
-│       └── app.js       # Application logic
-├── assets/              # Application icons
-└── dist/                # Build output (generated)
+│       ├── desktop.js      # window.electronAPI backed by Tauri
+│       └── app.js          # Canvas, SSH, discovery, monitoring UI
+├── scripts/
+│   ├── copy-vendor.js      # Copies xterm into renderer/vendor
+│   └── dev-server.js       # Serves renderer/ on 127.0.0.1:1420
+└── test/hosts.test.js
 ```
 
-## Usage Guide
+`renderer/vendor/` is generated by `npm install`. It is not committed.
 
-### Getting Started
+## Configuration
 
-1. **Launch the application** using `npm start`
-2. **Open the Admin panel** (click "Admin" in toolbar) to configure your nodes
-3. **Add nodes** with their IP addresses and optional SSH credentials
-4. **Position nodes** using drag-and-drop or grid coordinates
-5. **Enable monitoring** to see real-time status updates
-
-### Node Configuration
-
-Each node can have:
-- **Name** - Display name
-- **IP Address** - Network address for monitoring/SSH
-- **Port** - Optional TCP port for connectivity checks
-- **Primary Parent** - Main upstream connection
-- **Failover Parent** - Backup connection (highlighted in orange when active)
-- **SSH Credentials** - Port, username, password for terminal access
-- **Icon** - Lucide icon name, image URL, or custom SVG
-
-### Grid System
-
-The topology uses a grid system with:
-- **Columns**: A-Z, then AA-AZ (52 columns total)
-- **Rows**: 1-50
-
-Enable **Snap to Grid** for precise positioning on grid intersections.
-
-### SSH Terminal
-
-1. **Right-click** on any node with SSH configured
-2. Select **"SSH Connect"**
-3. Enter credentials (pre-filled if configured)
-4. A new terminal tab opens in the sidebar
-
-Multiple terminals can be open simultaneously.
-
-### Network Discovery
-
-1. Click **"Discover"** in the toolbar
-2. Select your network interface
-3. Adjust the IP range if needed
-4. Click **"Start Scan"**
-5. Select discovered hosts to add to your topology
-
-### Keyboard Shortcuts
-
-- **Scroll wheel** - Zoom in/out
-- **Click + drag (background)** - Pan view
-- **Click + drag (node)** - Move node
-- **Double-click (node)** - Edit node
-- **Right-click (node)** - Context menu
-
-## Configuration Format
-
-The `config.json` file structure:
+The saved file has this shape:
 
 ```json
 {
@@ -159,99 +94,33 @@ The `config.json` file structure:
       "sshUser": "admin",
       "sshPass": ""
     }
-  ]
+  ],
+  "connections": []
 }
 ```
 
-### Node Properties
+`address` is an IPv4 address or a hostname. `port` set to a number makes monitoring use TCP instead of ping. Positions are percentages. Legacy `primaryParentId` / `secondaryParentId` values are turned into `connections` the first time the canvas loads them.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | string | Unique identifier |
-| `name` | string | Display name |
-| `address` | string | IP address or hostname |
-| `port` | number/null | TCP port for health check (null = ping) |
-| `primaryParentId` | string/null | ID of primary parent node |
-| `secondaryParentId` | string/null | ID of failover parent node |
-| `icon` | string | Icon name, URL, or SVG code |
-| `iconType` | string | "lucide", "url", or "svg" |
-| `x` | number | X position (0-100%) |
-| `y` | number | Y position (0-100%) |
-| `sshPort` | number | SSH port (default: 22) |
-| `sshUser` | string | SSH username |
-| `sshPass` | string | SSH password |
+## Packages
 
-## Architecture
+- `@tauri-apps/cli` runs and packages the window
+- `xterm` and `xterm-addon-fit` draw the terminal
+- SSH is implemented in Rust with `russh`, not a Node package
 
-### Main Process (main.js)
+## Checks
 
-Handles:
-- Window management
-- SSH connections via ssh2
-- Network scanning (ping, ARP)
-- File system operations
-- Real-time monitoring
+```bash
+npm test
+```
 
-### Preload Script (preload.js)
+## Limits
 
-Secure IPC bridge exposing:
-- `electronAPI.config` - Configuration management
-- `electronAPI.ssh` - SSH terminal operations
-- `electronAPI.network` - Network discovery
-- `electronAPI.monitor` - Real-time monitoring
-
-### Renderer (renderer/)
-
-- Pure HTML/CSS/JS frontend
-- Tailwind CSS for styling
-- Lucide icons
-- xterm.js for terminal emulation
-
-## Dependencies
-
-### Production
-- `ssh2` - SSH2 client for Node.js
-- `xterm` - Terminal emulator
-- `xterm-addon-fit` - Terminal auto-sizing
-- `xterm-addon-web-links` - Clickable links
-- `node-arp` - ARP table access
-- `ping` - ICMP ping wrapper
-
-### Development
-- `electron` - Desktop application framework
-- `electron-builder` - Application packaging
-
-## Troubleshooting
-
-### SSH Connection Issues
-- Verify the target host is reachable
-- Check that SSH credentials are correct
-- Ensure the SSH port is not blocked by firewall
-
-### Network Discovery Not Finding Hosts
-- Run the application with administrator/root privileges
-- Verify you're scanning the correct IP range
-- Check firewall settings
-
-### Monitoring Not Working
-- Ensure nodes have valid IP addresses
-- Check network connectivity
-- Verify there are no conflicting services
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+- Discovery and monitoring understand IPv4 only.
+- Tailwind and Lucide are loaded from the Internet. Without it, the page has no utility styles and no icons.
+- `xterm` 5 and `xterm-addon-fit` 0.8 are the packages this UI was written against. Both names are deprecated upstream in favor of `@xterm/xterm` and `@xterm/addon-fit`.
+- SSH accepts the server host key without remembering it. That matches the previous client. A known-hosts check is not in this version.
+- There is no automated test of the canvas. `npm test` covers the checks that decide whether a host is safe to pass to `ping`.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- [Electron](https://www.electronjs.org/)
-- [xterm.js](https://xtermjs.org/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [Lucide Icons](https://lucide.dev/)
+MIT. See [LICENSE](LICENSE).

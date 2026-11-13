@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://cdn.tailwindcss.com https://unpkg.com;">
     <title>Network Topology Admin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -129,10 +129,12 @@
         </div>
     </div>
 
+    <script src="js/desktop.js"></script>
     <script>
         lucide.createIcons();
 
         let hosts = [];
+        let connections = [];
         let settings = { showGrid: true, snapToGrid: true };
 
         // ============================================
@@ -145,24 +147,25 @@
             updateStats();
         }
 
+        function applyConfig(data) {
+            const source = Array.isArray(data) ? { nodes: data } : (data || {});
+            hosts = (source.nodes || []).map(normalizeHost);
+            connections = Array.isArray(source.connections) ? source.connections : [];
+            settings = { ...settings, ...(source.settings || {}) };
+        }
+
         async function loadConfig() {
             try {
                 if (window.electronAPI) {
-                    const config = await window.electronAPI.config.load();
-                    hosts = (config.nodes || []).map(normalizeHost);
-                    settings = config.settings || settings;
+                    applyConfig(await window.electronAPI.config.load());
                 } else {
-                    // Browser fallback
                     const res = await fetch('config.json');
-                    if (res.ok) {
-                        const data = await res.json();
-                        hosts = (data.nodes || []).map(normalizeHost);
-                        settings = data.settings || settings;
-                    }
+                    if (res.ok) applyConfig(await res.json());
                 }
             } catch (e) {
                 console.error('Failed to load config:', e);
                 hosts = [];
+                connections = [];
             }
 
             document.getElementById('showGridCheck').checked = settings.showGrid;
@@ -180,22 +183,28 @@
         }
 
         function normalizeHost(h) {
+            const source = h || {};
+            const {
+                status, uptime, activeParentId, level, responseTime,
+                ...rest
+            } = source;
             return {
-                id: h.id || ('node_' + Date.now() + '_' + Math.floor(Math.random() * 1000)),
-                name: h.name || 'Unnamed',
-                address: h.address || '',
-                port: (h.port === '' || typeof h.port === 'undefined') ? null : h.port,
-                primaryParentId: (h.primaryParentId && h.primaryParentId !== '') ? h.primaryParentId : null,
-                secondaryParentId: (h.secondaryParentId && h.secondaryParentId !== '') ? h.secondaryParentId : null,
-                icon: h.icon || 'circle',
-                iconType: h.iconType || 'lucide',
-                x: (h.x === null || h.x === '') ? null : h.x,
-                y: (h.y === null || h.y === '') ? null : h.y,
-                sshPort: h.sshPort || 22,
-                sshUser: h.sshUser || '',
-                sshPass: h.sshPass || '',
-                linkType: h.linkType || null,
-                linkSpeed: h.linkSpeed || null
+                ...rest,
+                id: rest.id || ('node_' + Date.now() + '_' + Math.floor(Math.random() * 1000)),
+                name: rest.name || 'Unnamed',
+                address: rest.address || '',
+                port: (rest.port === '' || typeof rest.port === 'undefined') ? null : rest.port,
+                primaryParentId: (rest.primaryParentId && rest.primaryParentId !== '') ? rest.primaryParentId : null,
+                secondaryParentId: (rest.secondaryParentId && rest.secondaryParentId !== '') ? rest.secondaryParentId : null,
+                icon: rest.icon || 'circle',
+                iconType: rest.iconType || 'lucide',
+                x: (rest.x === null || rest.x === '' || typeof rest.x === 'undefined') ? null : rest.x,
+                y: (rest.y === null || rest.y === '' || typeof rest.y === 'undefined') ? null : rest.y,
+                sshPort: rest.sshPort || 22,
+                sshUser: rest.sshUser || '',
+                sshPass: rest.sshPass || '',
+                linkType: rest.linkType || null,
+                linkSpeed: rest.linkSpeed || null
             };
         }
 
@@ -216,7 +225,7 @@
                     hosts.forEach(h => {
                         if (h.id !== host.id) {
                             const selected = currentParentId === h.id ? 'selected' : '';
-                            options += `<option value="${h.id}" ${selected}>${escapeHtml(h.name)}</option>`;
+                            options += `<option value="${escapeHtml(h.id)}" ${selected}>${escapeHtml(h.name)}</option>`;
                         }
                     });
                     return options;
@@ -325,18 +334,26 @@
             updateStats();
         }
 
+        function safeLucideName(name) {
+            return /^[a-z0-9-]+$/i.test(name || '') ? name : 'circle';
+        }
+
+        function sanitizeSvg(svg) {
+            if (typeof svg !== 'string') return '';
+            const trimmed = svg.trim();
+            if (!trimmed.startsWith('<svg') || !trimmed.endsWith('</svg>')) return '';
+            if (/<script|<\/script|on\w+\s*=|javascript:|data:/i.test(trimmed)) return '';
+            return trimmed;
+        }
+
         function renderIconPreview(host) {
             if (host.iconType === 'url') {
-                return `<img src="${host.icon}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
+                return `<img src="${escapeHtml(host.icon)}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
             }
             if (host.iconType === 'svg') {
-                const svgContent = host.icon.trim();
-                if (svgContent.startsWith('<svg') && svgContent.endsWith('>')) {
-                    return host.icon;
-                }
-                return `<div class="text-[8px] text-slate-500">SVG</div>`;
+                return sanitizeSvg(host.icon) || '<div class="text-[8px] text-slate-500">SVG</div>';
             }
-            return `<i data-lucide="${host.icon || 'circle'}" class="w-5 h-5 text-slate-400"></i>`;
+            return `<i data-lucide="${safeLucideName(host.icon)}" class="w-5 h-5 text-slate-400"></i>`;
         }
 
         function updateStats() {
@@ -363,10 +380,17 @@
 
         function duplicateRow(index) {
             const original = hosts[index];
-            const duplicate = { ...original };
-            duplicate.id = 'node_' + Date.now();
-            duplicate.name = original.name + ' (copy)';
-            // Offset position slightly
+            const duplicate = normalizeHost({
+                ...original,
+                id: 'node_' + Date.now(),
+                name: original.name + ' (copy)'
+            });
+            if (Array.isArray(duplicate.ports)) {
+                duplicate.ports = duplicate.ports.map((port, portIndex) => ({
+                    ...port,
+                    id: `${duplicate.id}_port_${portIndex}`
+                }));
+            }
             if (duplicate.x !== null) duplicate.x = Math.min(95, duplicate.x + 5);
             if (duplicate.y !== null) duplicate.y = Math.min(95, duplicate.y + 5);
             hosts.splice(index + 1, 0, duplicate);
@@ -375,7 +399,11 @@
 
         function removeRow(index) {
             if (confirm(`Delete "${hosts[index].name}"?`)) {
+                const removedId = hosts[index].id;
                 hosts.splice(index, 1);
+                connections = connections.filter((connection) =>
+                    connection.sourceNodeId !== removedId && connection.targetNodeId !== removedId
+                );
                 render();
             }
         }
@@ -400,14 +428,21 @@
         // Config Management
         // ============================================
 
-        async function saveConfig() {
-            const config = {
+        function currentConfig() {
+            return {
                 settings: {
                     showGrid: document.getElementById('showGridCheck').checked,
-                    snapToGrid: document.getElementById('snapToGridCheck').checked
+                    snapToGrid: document.getElementById('snapToGridCheck').checked,
+                    gridSize: settings.gridSize || 100,
+                    theme: settings.theme
                 },
-                nodes: hosts
+                nodes: hosts,
+                connections
             };
+        }
+
+        async function saveConfig() {
+            const config = currentConfig();
 
             if (window.electronAPI) {
                 const result = await window.electronAPI.config.save(config);
@@ -423,13 +458,7 @@
         }
 
         async function exportConfig() {
-            const config = {
-                settings: {
-                    showGrid: document.getElementById('showGridCheck').checked,
-                    snapToGrid: document.getElementById('snapToGridCheck').checked
-                },
-                nodes: hosts
-            };
+            const config = currentConfig();
 
             if (window.electronAPI) {
                 await window.electronAPI.config.export(config);
@@ -452,8 +481,7 @@
             if (window.electronAPI) {
                 const result = await window.electronAPI.config.import();
                 if (result.success) {
-                    hosts = (result.config.nodes || []).map(normalizeHost);
-                    settings = result.config.settings || settings;
+                    applyConfig(result.config);
                     document.getElementById('showGridCheck').checked = settings.showGrid;
                     document.getElementById('snapToGridCheck').checked = settings.snapToGrid !== false;
                     render();
@@ -468,9 +496,7 @@
                     const reader = new FileReader();
                     reader.onload = (ev) => {
                         try {
-                            const parsed = JSON.parse(ev.target.result);
-                            hosts = (parsed.nodes || []).map(normalizeHost);
-                            settings = parsed.settings || settings;
+                            applyConfig(JSON.parse(ev.target.result));
                             document.getElementById('showGridCheck').checked = settings.showGrid;
                             document.getElementById('snapToGridCheck').checked = settings.snapToGrid !== false;
                             render();
