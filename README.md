@@ -43,6 +43,7 @@ npm start
 - Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
 - **Clés d’hôte SSH (TOFU)** : à la première connexion à un `hôte:port`, la connexion est refusée tant que l’utilisateur n’a pas confirmé l’empreinte SHA256 de la clé présentée par le serveur. Après confirmation, la clé est mémorisée. Si un hôte connu présente une autre clé, la connexion est refusée (attaque de l’homme du milieu possible, ou serveur réinstallé) ; la boîte de dialogue d’erreur propose d’oublier la clé enregistrée, et la connexion suivante redemande une confirmation.
 - Import et export de la topologie en JSON. Un export **ne contient aucun** mot de passe ni passphrase de clé. Il indique seulement, sur chaque nœud, si un secret existe et s’il s’agit d’un mot de passe ou d’une passphrase (`sshSecret.type`).
+- **Export image** (bouton *Image*) : PNG (échelle 1x ou 2x) ou SVG autonome, sur fond sombre ou clair. Le SVG contient nœuds, libellés, liens, conteneurs et zones VLAN, avec styles embarqués, sans script ni ressource externe ; les icônes Lucide et SVG sont recopiées après filtrage, une icône URL est remplacée par l’initiale du nœud. Le PNG est rastérisé depuis ce SVG. L’écriture passe par la commande `image_export` et la boîte « Enregistrer sous » du système : le contenu est vérifié (signature PNG, SVG sans contenu actif) et l’extension `.png` / `.svg` est imposée. La construction du SVG est dans `renderer/js/export.js`.
 
 ## Où est stockée la topologie
 
@@ -84,6 +85,7 @@ Custom-network-topology/
 │       ├── hosts.js        # Contrôles hôte (IPv4, IPv6, nom) / port / plage, miroir de hosts.rs
 │       ├── probe.js        # Confirmation d’état et lien actif
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
+│       ├── export.js       # Export image : SVG autonome, PNG, boîte d’options
 │       ├── admin.js        # Tableau Admin
 │       └── app.js          # Canevas, SSH, découverte, UI de supervision
 ├── scripts/

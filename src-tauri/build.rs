@@ -18,6 +18,7 @@ fn main() {
         "network_neighbors",
         "monitor_start",
         "monitor_stop",
+        "image_export",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

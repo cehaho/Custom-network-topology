@@ -1,4 +1,5 @@
 mod config;
+mod export;
 mod hosts;
 mod known_hosts;
 mod monitor;
@@ -239,6 +240,7 @@ pub fn run() {
             network_neighbors,
             monitor_start,
             monitor_stop,
+            export::image_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
