@@ -70,14 +70,14 @@ async function init() {
   // Initialize minimap
   initMinimap();
 
-  if (window.electronAPI) startMonitoring();
+  if (window.desktopAPI) startMonitoring();
 }
 
 async function loadConfig() {
   try {
     let raw = null;
-    if (window.electronAPI) {
-      raw = await window.electronAPI.config.load();
+    if (window.desktopAPI) {
+      raw = await window.desktopAPI.config.load();
     } else {
       const res = await fetch('config.json');
       if (res.ok) raw = await res.json();
@@ -95,7 +95,7 @@ async function loadConfig() {
       return;
     }
     config = loaded.document;
-    if (loaded.changed && window.electronAPI) await saveConfig();
+    if (loaded.changed && window.desktopAPI) await saveConfig();
 
     updateSnapButton();
     renderTree(config.nodes);
@@ -113,7 +113,7 @@ async function saveConfig() {
   }
   const snapshot = prepared.document;
   try {
-    if (!window.electronAPI) {
+    if (!window.desktopAPI) {
       config = snapshot;
       if (Topology.hasSecretValues(snapshot)) {
         (config.nodes || []).forEach((node) => Topology.stripNodeSecretValues(node));
@@ -124,7 +124,7 @@ async function saveConfig() {
       }
       return { success: true };
     }
-    const result = await window.electronAPI.config.save(snapshot, pendingImportToken);
+    const result = await window.desktopAPI.config.save(snapshot, pendingImportToken);
     if (result && result.success !== false && result.config) {
       const loaded = Topology.read(result.config);
       config = loaded.ok ? loaded.document : Topology.withoutSecretValues(snapshot);
@@ -143,8 +143,8 @@ async function saveConfig() {
 }
 
 async function importTopologyInteractive() {
-  if (!window.electronAPI) return null;
-  const result = await window.electronAPI.config.import();
+  if (!window.desktopAPI) return null;
+  const result = await window.desktopAPI.config.import();
   if (!result || result.canceled) return null;
   if (!result.success || !result.config) {
     toastError('Import refused', (result && result.error) || 'Import failed');
@@ -157,7 +157,7 @@ async function importTopologyInteractive() {
   }
   if (!window.confirm(Topology.importMessage(loaded.document))) {
     pendingImportToken = null;
-    if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+    if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
     return null;
   }
   pendingImportToken = result.importToken || null;
@@ -430,14 +430,14 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
-    if (!window.electronAPI) return;
+    if (!window.desktopAPI) return;
     const prepared = Topology.prepare(config);
     if (!prepared.ok) {
       toastError('Export refused', prepared.error);
       return;
     }
     const exported = Topology.withoutSecretValues(prepared.document);
-    const result = await window.electronAPI.config.export(exported);
+    const result = await window.desktopAPI.config.export(exported);
     if (result && result.success === false && !result.canceled) {
       toastError('Export refused', result.error || 'Export failed');
     }
@@ -1802,10 +1802,10 @@ function editNodeFromContext() {
 }
 
 async function pingNodeFromContext() {
-  if (!contextMenuNode || !window.electronAPI) return;
+  if (!contextMenuNode || !window.desktopAPI) return;
   hideContextMenu();
 
-  const result = await window.electronAPI.network.ping(contextMenuNode.address);
+  const result = await window.desktopAPI.network.ping(contextMenuNode.address);
   if (result.success) {
     toastSuccess('Ping Successful', `${contextMenuNode.address} responded in ${result.duration}ms`);
   } else {
@@ -1949,12 +1949,12 @@ function toggleSSHAuthFields() {
 }
 
 async function browseSSHKey() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Not Available', 'File browsing is only available in the desktop application');
     return;
   }
 
-  const result = await window.electronAPI.ssh.browseKey();
+  const result = await window.desktopAPI.ssh.browseKey();
   if (result.success) {
     document.getElementById('ssh-key-path').value = result.path;
     toastInfo('Key Selected', `Selected: ${result.path.split(/[\\/]/).pop()}`);
@@ -1989,7 +1989,7 @@ async function rememberSecret(nodeId, changes) {
 }
 
 async function connectSSH() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('SSH Unavailable', 'SSH is only available in the desktop application');
     return;
   }
@@ -2049,10 +2049,10 @@ async function connectSSH() {
   document.getElementById('terminal-status').textContent = 'Connecting...';
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
-  let result = await window.electronAPI.ssh.connect(connectionInfo);
+  let result = await window.desktopAPI.ssh.connect(connectionInfo);
   if (!result.success && result.hostKey && result.hostKey.status === 'unknown' && confirmUnknownHostKey(result.hostKey)) {
     connectionInfo.acceptHostKey = result.hostKey.fingerprint;
-    result = await window.electronAPI.ssh.connect(connectionInfo);
+    result = await window.desktopAPI.ssh.connect(connectionInfo);
   }
 
   if (result.success) {
@@ -2093,7 +2093,7 @@ async function offerToForgetHostKey(hostKey) {
     `Cancel: keep the stored key.`
   );
   if (!forget) return;
-  const removed = await window.electronAPI.ssh.forgetHostKey(hostKey.host, hostKey.port);
+  const removed = await window.desktopAPI.ssh.forgetHostKey(hostKey.host, hostKey.port);
   if (removed && removed.success) {
     toastSuccess('Host key forgotten', `Connect again to verify the new key of ${hostKey.host}`);
   } else {
@@ -2143,11 +2143,11 @@ function createTerminalTab(nodeId, host) {
 }
 
 function sendTerminalSize(nodeId, term) {
-  if (!window.electronAPI || !term) return;
+  if (!window.desktopAPI || !term) return;
   const cols = term.cols;
   const rows = term.rows;
   if (!Number.isInteger(cols) || !Number.isInteger(rows)) return;
-  window.electronAPI.ssh.resize(nodeId, cols, rows);
+  window.desktopAPI.ssh.resize(nodeId, cols, rows);
 }
 
 async function initTerminal(nodeId, container) {
@@ -2171,8 +2171,8 @@ async function initTerminal(nodeId, container) {
   term.open(container);
 
   term.onData(data => {
-    if (window.electronAPI) {
-      window.electronAPI.ssh.write(nodeId, data);
+    if (window.desktopAPI) {
+      window.desktopAPI.ssh.write(nodeId, data);
     }
   });
 
@@ -2222,8 +2222,8 @@ async function closeTerminalTab(nodeId) {
   if (termData && termData.term) {
     termData.term.dispose();
   }
-  if (window.electronAPI) {
-    await window.electronAPI.ssh.disconnect(nodeId);
+  if (window.desktopAPI) {
+    await window.desktopAPI.ssh.disconnect(nodeId);
   }
 
   if (tab) tab.remove();
@@ -2245,16 +2245,16 @@ async function closeTerminalTab(nodeId) {
 
 // SSH data listener
 function setupSSHListeners() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
-  window.electronAPI.ssh.onData(({ nodeId, data }) => {
+  window.desktopAPI.ssh.onData(({ nodeId, data }) => {
     const termData = terminals.get(nodeId);
     if (termData && termData.term) {
       termData.term.write(data);
     }
   });
 
-  window.electronAPI.ssh.onClosed(({ nodeId }) => {
+  window.desktopAPI.ssh.onClosed(({ nodeId }) => {
     closeTerminalTab(nodeId);
   });
 }
@@ -2621,11 +2621,11 @@ function clearNodeSecretField() {
 }
 
 async function browseNodeSshKey() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Not Available', 'File browsing is only available in the desktop application');
     return;
   }
-  const result = await window.electronAPI.ssh.browseKey();
+  const result = await window.desktopAPI.ssh.browseKey();
   if (result && result.success) {
     document.getElementById('node-ssh-key-path').value = result.path;
   }
@@ -2763,13 +2763,13 @@ let discoveredHosts = [];
 let networkInterfaces = []; // Store interfaces for reference
 
 async function openDiscoveryModal() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Discovery Unavailable', 'Network discovery is only available in the desktop application');
     return;
   }
 
   // Get network interfaces
-  networkInterfaces = await window.electronAPI.network.getLocalInfo();
+  networkInterfaces = await window.desktopAPI.network.getLocalInfo();
   const select = document.getElementById('discovery-interface');
   select.innerHTML = '';
 
@@ -2831,7 +2831,7 @@ function updateDiscoveryRange() {
 }
 
 async function startNetworkScan() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
   const baseIp = document.getElementById('discovery-base').value.trim();
   const startRange = parseInt(document.getElementById('discovery-start').value, 10);
@@ -2854,7 +2854,7 @@ async function startNetworkScan() {
   document.getElementById('discovery-text').textContent = 'Scanning...';
 
   // Listen for progress updates
-  const removeProgressListener = window.electronAPI.network.onScanProgress((progress) => {
+  const removeProgressListener = window.desktopAPI.network.onScanProgress((progress) => {
     const percent = Math.round((progress.current / progress.total) * 100);
     document.getElementById('discovery-progress-bar').style.width = percent + '%';
     document.getElementById('discovery-text').textContent = `Scanning... ${progress.current}/${progress.total} (Found: ${progress.found})`;
@@ -2862,7 +2862,7 @@ async function startNetworkScan() {
 
   let results;
   try {
-    results = await window.electronAPI.network.scan(baseIp, startRange, endRange);
+    results = await window.desktopAPI.network.scan(baseIp, startRange, endRange);
   } catch (error) {
     removeProgressListener();
     document.getElementById('btn-start-scan').classList.remove('hidden');
@@ -2874,7 +2874,7 @@ async function startNetworkScan() {
   removeProgressListener();
 
   // Also get ARP table for MAC addresses
-  const arpTable = await window.electronAPI.network.arp();
+  const arpTable = await window.desktopAPI.network.arp();
 
   // Merge results
   discoveredHosts = results.map(r => {
@@ -3181,9 +3181,9 @@ function autoLayoutNodes() {
 // ============================================
 
 function setupMonitoringListener() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
-  window.electronAPI.monitor.onStatus((data) => {
+  window.desktopAPI.monitor.onStatus((data) => {
     if (!data || !Array.isArray(data.nodes)) return;
     const updated = document.getElementById('last-updated');
     if (updated) updated.textContent = 'Last Update: ' + (data.updated || '');
@@ -3221,10 +3221,10 @@ function setupMonitoringListener() {
 }
 
 async function startMonitoring() {
-  if (!window.electronAPI || monitoringActive) return;
+  if (!window.desktopAPI || monitoringActive) return;
 
   const settings = config.settings || {};
-  await window.electronAPI.monitor.start({
+  await window.desktopAPI.monitor.start({
     nodes: (config.nodes || []).map((node) => ({
       id: node.id,
       address: typeof node.address === 'string' ? node.address : '',
@@ -3239,9 +3239,9 @@ async function startMonitoring() {
 }
 
 async function stopMonitoring() {
-  if (!window.electronAPI || !monitoringActive) return;
+  if (!window.desktopAPI || !monitoringActive) return;
 
-  await window.electronAPI.monitor.stop();
+  await window.desktopAPI.monitor.stop();
   monitoringActive = false;
   document.getElementById('btn-monitoring').classList.remove('active');
 }

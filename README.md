@@ -71,7 +71,7 @@ Custom-network-topology/
 │   ├── admin.html          # Éditeur de nœuds (même document)
 │   ├── config.json         # Exemple copié au premier lancement
 │   └── js/
-│       ├── desktop.js      # window.electronAPI branché sur Tauri
+│       ├── desktop.js      # window.desktopAPI branché sur Tauri
 │       ├── topology.js     # Document de topologie partagé
 │       ├── probe.js        # Confirmation d’état et lien actif
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
@@ -83,7 +83,7 @@ Custom-network-topology/
 └── test/                   # hosts, topology, probe, secrets, config
 ```
 
-`renderer/vendor/` est généré par `npm install` (script `postinstall`), puis régénéré avant `tauri dev` et `tauri build` (`beforeDevCommand` / `beforeBuildCommand`). Il n’est pas versionné. Tailwind ne génère que les classes présentes en toutes lettres dans `renderer/` : une classe construite par concaténation dans le JS doit être ajoutée au `safelist` de `tailwind.config.js`. Après une modification de classes hors `npm start`, relancer `node scripts/copy-vendor.js`. Le nom `window.electronAPI` est conservé côté rendu pour limiter le diff ; l’implémentation est Tauri.
+`renderer/vendor/` est généré par `npm install` (script `postinstall`), puis régénéré avant `tauri dev` et `tauri build` (`beforeDevCommand` / `beforeBuildCommand`). Il n’est pas versionné. Tailwind ne génère que les classes présentes en toutes lettres dans `renderer/` : une classe construite par concaténation dans le JS doit être ajoutée au `safelist` de `tailwind.config.js`. Après une modification de classes hors `npm start`, relancer `node scripts/copy-vendor.js`.
 
 ## Configuration
 

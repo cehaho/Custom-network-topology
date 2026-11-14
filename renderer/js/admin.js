@@ -56,7 +56,7 @@
     };
     try {
       let raw = null;
-      if (window.electronAPI) raw = await window.electronAPI.config.load();
+      if (window.desktopAPI) raw = await window.desktopAPI.config.load();
       else {
         const response = await fetch('config.json');
         if (response.ok) raw = await response.json();
@@ -69,8 +69,8 @@
           alert(loaded.error);
         } else {
           standaloneDocument = loaded.document;
-          if (loaded.changed && window.electronAPI) {
-            const saved = await window.electronAPI.config.save(standaloneDocument, null);
+          if (loaded.changed && window.desktopAPI) {
+            const saved = await window.desktopAPI.config.save(standaloneDocument, null);
             if (saved && saved.success !== false && saved.config) {
               const again = Topology.read(saved.config);
               if (again.ok) standaloneDocument = again.document;
@@ -418,8 +418,8 @@
       showToast(prepared.error, 'error');
       return false;
     }
-    if (window.electronAPI) {
-      const result = await window.electronAPI.config.save(prepared.document, importToken);
+    if (window.desktopAPI) {
+      const result = await window.desktopAPI.config.save(prepared.document, importToken);
       if (!result || result.success === false) {
         showToast('Failed to save: ' + ((result && result.error) || 'unknown error'), 'error');
         return false;
@@ -452,7 +452,7 @@
       return;
     }
     const exported = Topology.withoutSecretValues(prepared.document);
-    if (window.electronAPI) await window.electronAPI.config.export(exported);
+    if (window.desktopAPI) await window.desktopAPI.config.export(exported);
     else download(exported);
   }
 
@@ -467,8 +467,8 @@
   }
 
   async function importStandalone() {
-    if (window.electronAPI) {
-      const result = await window.electronAPI.config.import();
+    if (window.desktopAPI) {
+      const result = await window.desktopAPI.config.import();
       if (!result || result.canceled) return null;
       if (!result.success || !result.config) {
         alert((result && result.error) || 'Import failed');
@@ -481,7 +481,7 @@
       }
       if (!window.confirm(Topology.importMessage(loaded.document))) {
         importToken = null;
-        if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+        if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
         return null;
       }
       importToken = result.importToken || null;

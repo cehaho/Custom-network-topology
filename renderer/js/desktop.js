@@ -1,4 +1,4 @@
-// Desktop bridge. The canvas still talks to window.electronAPI.
+// Desktop bridge exposed to the renderer as window.desktopAPI.
 // Inside Tauri this object calls invoke and events. In a browser it stays absent.
 (function () {
   if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.event) return;
@@ -24,7 +24,7 @@
   const userAgent = navigator.userAgent || '';
   const platform = /Windows/i.test(userAgent) ? 'win32' : /Mac/i.test(userAgent) ? 'darwin' : 'linux';
 
-  window.electronAPI = {
+  window.desktopAPI = {
     config: {
       load: () => invoke('config_load'),
       save: (config, importToken) => invoke('config_save', { config, importToken: importToken || null }),
@@ -55,6 +55,6 @@
       onStatus: (callback) => subscribe('monitor-status', callback)
     },
     platform,
-    isElectron: true
+    isDesktop: true
   };
 })();
