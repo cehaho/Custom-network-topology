@@ -1,5 +1,6 @@
 'use strict';
 
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,7 +23,7 @@ function copyDir(source, destination) {
 function requireDir(relativePath) {
   const absolute = path.join(root, relativePath);
   if (!fs.existsSync(absolute)) {
-    throw new Error(`Missing ${relativePath}. Install dependencies before copying the terminal vendor files.`);
+    throw new Error(`Missing ${relativePath}. Install dependencies before copying the vendor files.`);
   }
   return absolute;
 }
@@ -30,11 +31,28 @@ function requireDir(relativePath) {
 fs.rmSync(vendor, { recursive: true, force: true });
 fs.mkdirSync(vendor, { recursive: true });
 
-copyDir(requireDir('node_modules/xterm/lib'), path.join(vendor, 'xterm'));
-copyDir(requireDir('node_modules/xterm-addon-fit/lib'), path.join(vendor, 'xterm-addon-fit'));
+copyDir(requireDir('node_modules/@xterm/xterm/lib'), path.join(vendor, 'xterm'));
+copyDir(requireDir('node_modules/@xterm/addon-fit/lib'), path.join(vendor, 'addon-fit'));
 fs.copyFileSync(
-  requireDir('node_modules/xterm/css/xterm.css'),
+  requireDir('node_modules/@xterm/xterm/css/xterm.css'),
   path.join(vendor, 'xterm.css')
 );
+fs.copyFileSync(
+  requireDir('node_modules/lucide/dist/umd/lucide.min.js'),
+  path.join(vendor, 'lucide.min.js')
+);
 
-console.log('Copied xterm assets to renderer/vendor');
+// Build only the Tailwind utilities used in renderer/ instead of the runtime Play CDN.
+execFileSync(
+  process.execPath,
+  [
+    requireDir('node_modules/tailwindcss/lib/cli.js'),
+    '--config', path.join(root, 'tailwind.config.js'),
+    '--input', path.join(root, 'tailwind.css'),
+    '--output', path.join(vendor, 'tailwind.css'),
+    '--minify'
+  ],
+  { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] }
+);
+
+console.log('Copied xterm and Lucide, built Tailwind CSS into renderer/vendor');

@@ -2205,7 +2205,7 @@ async function initTerminal(nodeId, container) {
       background: '#1a1a2e',
       foreground: '#e2e8f0',
       cursor: '#3b82f6',
-      selection: 'rgba(59, 130, 246, 0.3)'
+      selectionBackground: 'rgba(59, 130, 246, 0.3)'
     }
   });
 
