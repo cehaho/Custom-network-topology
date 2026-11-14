@@ -2763,6 +2763,7 @@ async function saveNode() {
 
 let discoveredHosts = [];
 let networkInterfaces = []; // Store interfaces for reference
+let discoveryGeneration = 0; // ignores enrichment results from an older scan
 
 async function openDiscoveryModal() {
   if (!window.desktopAPI) {
@@ -2852,6 +2853,7 @@ async function startNetworkScan() {
   }
 
   discoveredHosts = [];
+  discoveryGeneration += 1;
   document.getElementById('discovery-status').classList.remove('hidden');
   document.getElementById('discovery-results').classList.add('hidden');
   document.getElementById('btn-start-scan').classList.add('hidden');
@@ -2906,8 +2908,8 @@ async function startNetworkScan() {
   });
 
   // Filter out already configured hosts
-  const configuredIps = config.nodes.map(n => String(n.address || '').toLowerCase());
-  discoveredHosts = discoveredHosts.filter(h => !configuredIps.includes(h.ip.toLowerCase()));
+  discoveredHosts = Discovery.newHosts(discoveredHosts, config.nodes)
+    .map((host) => Object.assign({ hostname: null, vendor: null, name: '', nameEdited: false }, host));
 
   document.getElementById('discovery-text').textContent = `Found ${discoveredHosts.length} new hosts`;
   document.getElementById('discovery-progress-bar').style.width = '100%';
@@ -2920,48 +2922,111 @@ async function startNetworkScan() {
   }
   document.getElementById('btn-start-scan').classList.remove('hidden');
   document.getElementById('btn-start-scan').textContent = 'Scan Again';
+
+  enrichDiscoveredHosts();
+}
+
+// Reverse DNS names and MAC vendors arrive after the scan, row by row.
+async function enrichDiscoveredHosts() {
+  const api = window.desktopAPI && window.desktopAPI.network;
+  if (!api || !api.enrich || discoveredHosts.length === 0) return;
+  const generation = discoveryGeneration;
+  const apply = (ip, info) => {
+    if (generation !== discoveryGeneration || !info) return;
+    const idx = discoveredHosts.findIndex((host) => host.ip === ip);
+    if (idx === -1) return;
+    const host = discoveredHosts[idx];
+    host.hostname = info.hostname || host.hostname || null;
+    host.vendor = info.vendor || host.vendor || null;
+    updateDiscoveryRow(idx);
+  };
+  const stop = api.onEnrichResult ? api.onEnrichResult((result) => result && apply(result.ip, result)) : () => {};
+  try {
+    const results = await api.enrich(discoveredHosts.map((host) => ({ ip: host.ip, mac: host.mac || null })));
+    Object.keys(results || {}).forEach((ip) => apply(ip, results[ip]));
+  } catch (error) {
+    console.warn('Discovery enrichment failed', error);
+  } finally {
+    stop();
+  }
 }
 
 function renderDiscoveryResults() {
   const container = document.getElementById('discovery-results');
   container.innerHTML = '';
   container.classList.remove('hidden');
+  if (discoveredHosts.length === 0) return;
 
+  const table = document.createElement('table');
+  table.className = 'discovery-table';
+  table.innerHTML = '<thead><tr><th></th><th>Address</th><th>Hostname</th><th>Vendor</th><th>MAC</th><th>Node name</th></tr></thead>';
+  const body = document.createElement('tbody');
   discoveredHosts.forEach((host, idx) => {
-    const div = document.createElement('div');
-    div.className = 'discovered-host';
-    div.innerHTML = `
-      <div>
-        <input type="checkbox" ${host.selected ? 'checked' : ''} onchange="discoveredHosts[${idx}].selected = this.checked" class="mr-2">
-        <span class="font-mono text-sm">${escapeHtml(host.ip)}</span>
-        ${host.mac ? `<span class="text-xs text-slate-500 ml-2">${escapeHtml(host.mac)}</span>` : ''}
-        ${host.ipv6 ? '<span class="text-xs text-slate-500 ml-2">IPv6 neighbour</span>' : ''}
-      </div>
+    const row = document.createElement('tr');
+    row.dataset.idx = String(idx);
+    row.innerHTML = `
+      <td><input type="checkbox" class="discovery-select" ${host.selected ? 'checked' : ''}></td>
+      <td class="font-mono">${escapeHtml(host.ip)}${host.ipv6 ? ' <span class="text-slate-500">IPv6</span>' : ''}</td>
+      <td class="discovery-hostname text-slate-400"></td>
+      <td class="discovery-vendor text-slate-400"></td>
+      <td class="font-mono text-slate-500">${host.mac ? escapeHtml(host.mac) : ''}</td>
+      <td><input type="text" class="form-input discovery-name" maxlength="64"></td>
     `;
-    container.appendChild(div);
+    row.querySelector('.discovery-select').addEventListener('change', (event) => {
+      host.selected = event.target.checked;
+    });
+    row.querySelector('.discovery-name').addEventListener('input', (event) => {
+      host.name = event.target.value;
+      host.nameEdited = true;
+    });
+    body.appendChild(row);
   });
+  table.appendChild(body);
+  container.appendChild(table);
+  discoveredHosts.forEach((host, idx) => updateDiscoveryRow(idx));
+}
+
+// Refreshes the hostname, vendor and suggested name cells of one row.
+function updateDiscoveryRow(idx) {
+  const host = discoveredHosts[idx];
+  const row = document.querySelector(`#discovery-results tr[data-idx="${idx}"]`);
+  if (!host || !row) return;
+  row.querySelector('.discovery-hostname').textContent = host.hostname || '';
+  row.querySelector('.discovery-vendor').textContent = host.vendor || '';
+  if (!host.nameEdited) {
+    host.name = Discovery.suggestName(host);
+    row.querySelector('.discovery-name').value = host.name;
+  }
+}
+
+// The canvas point (percent units) at the centre of the visible viewport.
+function viewportCenterPercent() {
+  const rect = viewport.getBoundingClientRect();
+  const worldX = (rect.width / 2 - pointX) / scale;
+  const worldY = (rect.height / 2 - pointY) / scale;
+  return { x: (worldX / window.innerWidth) * 100, y: (worldY / window.innerHeight) * 100 };
 }
 
 async function addDiscoveredNodes() {
   const selected = discoveredHosts.filter(h => h.selected);
-  const startCount = config.nodes.length;
+  const fields = Discovery.nodesForHosts(selected, config.nodes, viewportCenterPercent());
+  const stamp = Date.now();
 
-  selected.forEach((host, idx) => {
-    const col = (startCount + idx) % 10;
-    const row = Math.floor((startCount + idx) / 10);
-
-    config.nodes.push(Topology.createNode({
-      id: 'node_' + Date.now() + '_' + idx,
-      name: `Device ${host.ip}`,
-      address: host.ip,
-      icon: 'circle',
-      iconType: 'lucide',
-      x: (col * 10) + 5,
-      y: (row * 15) + 10
-    }));
+  fields.forEach((field, idx) => {
+    const node = Topology.createNode(Object.assign({ id: 'node_' + stamp + '_' + idx }, field));
+    if (field.mac) node.mac = field.mac;
+    config.nodes.push(node);
   });
 
-  saveConfig();
+  const saved = await saveConfig();
+  if (saved && saved.success === false) {
+    toastError('Save failed', saved.error || 'The topology could not be saved');
+  } else if (fields.length > 0) {
+    toastSuccess('Devices added', `${fields.length} node${fields.length === 1 ? '' : 's'} added to the canvas`);
+  }
+  if (selected.length > fields.length) {
+    toastInfo('Skipped', `${selected.length - fields.length} address${selected.length - fields.length === 1 ? ' is' : 'es are'} already on the canvas`);
+  }
   closeModal('discovery-modal');
 
   // Restart monitoring with new nodes if it was active

@@ -16,6 +16,7 @@ fn main() {
         "network_scan",
         "network_arp",
         "network_neighbors",
+        "network_enrich",
         "monitor_start",
         "monitor_stop",
     ];
