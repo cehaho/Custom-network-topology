@@ -150,7 +150,7 @@
                   <th class="p-4">IP Address / Port</th>
                   <th class="p-4">Links</th>
                   <th class="p-4">Cable</th>
-                  <th class="p-4">SSH</th>
+                  <th class="p-4">SSH / SNMP</th>
                   <th class="p-4">Icon</th>
                   <th class="p-4 text-center">Preview</th>
                   <th class="p-4"></th>
@@ -268,6 +268,7 @@
             </select>
             <input type="password" data-field="sshPass" data-index="${index}" value="" autocomplete="new-password" placeholder="${host.sshAuth === 'key' ? 'Key passphrase' : 'Password'}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-full text-xs">
             ${secretLine(host, index)}
+            ${window.SnmpUI ? SnmpUI.adminCell(host, index, escapeHtml) : ''}
           </div>
         </td>
         <td class="p-3 align-top">
@@ -405,6 +406,8 @@
       host.sshAuth = value === 'key' ? 'key' : 'password';
     } else if (field === 'sshPass') {
       Topology.acceptSecretEdit(host, value);
+    } else if (window.SnmpUI && SnmpUI.applyAdminField(host, field, event.target)) {
+      // SNMP settings and community
     } else {
       host[field] = value;
     }
@@ -417,6 +420,13 @@
     const index = Number(button.dataset.index);
     if (button.dataset.action === 'duplicate') duplicateRow(index);
     if (button.dataset.action === 'delete') removeRow(index);
+    if (button.dataset.action === 'clear-snmp-community' && window.SnmpUI) {
+      const host = current() && current().nodes[index];
+      if (!host) return;
+      SnmpUI.clearCommunity(host);
+      markDirty();
+      render();
+    }
     if (button.dataset.action === 'clear-secret') {
       const doc = current();
       const host = doc && doc.nodes[index];

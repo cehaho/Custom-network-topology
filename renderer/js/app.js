@@ -63,6 +63,7 @@ async function init() {
   setupEventListeners();
   await loadConfig();
   setupMonitoringListener();
+  SnmpUI.attach(() => requestAnimationFrame(drawLines));
 
   // Initialize theme
   initTheme();
@@ -663,6 +664,7 @@ function renderTree(nodes) {
     el.id = `node-${node.id}`;
     el.className = `node-container card is-container container-${safeContainerType(node.containerType)}`;
     el.dataset.nodeId = node.id;
+    SnmpUI.decorateNode(el, node.id);
     el.dataset.isContainer = 'true';
 
     // Get children of this container
@@ -863,6 +865,7 @@ function renderTree(nodes) {
     el.id = `node-${node.id}`;
     el.className = 'node-container card';
     el.dataset.nodeId = node.id;
+    SnmpUI.decorateNode(el, node.id);
 
     let leftPos, topPos;
     if (node.x !== null && node.x !== undefined) {
@@ -1012,6 +1015,8 @@ function drawLines() {
       pathRev.classList.add('animate-flow-reverse', 'connection-animated');
       group.appendChild(pathRev);
     }
+
+    SnmpUI.decorateLink(group, conn, config, () => { saveConfig(); drawLines(); });
 
     // Click handler for selection
     group.addEventListener('click', (e) => {
@@ -2281,6 +2286,7 @@ function openNodeModal(node = null) {
   nodeSecretClear = false;
   refreshNodeSecretHint(node);
   toggleNodeSshAuth();
+  SnmpUI.fillForm(node);
   const cable = node ? Topology.primaryCable(config, node.id) : null;
   document.getElementById('node-link-type').value = cable ? (cable.medium || '') : '';
   document.getElementById('node-link-speed').value = cable ? (cable.speed || '') : '';
@@ -2704,6 +2710,11 @@ async function saveNode() {
     nodeData.sshPassphrase = typedPassphrase;
   } else if (sshAuth !== 'key' && typedPassword) {
     nodeData.sshPass = typedPassword;
+  }
+  const snmpError = SnmpUI.readForm(nodeData);
+  if (snmpError) {
+    toastError('Validation Error', snmpError);
+    return;
   }
   if (!previous) nodeData.expanded = true;
 
@@ -3165,6 +3176,7 @@ async function startMonitoring() {
     interval: Probe.monitoringInterval(settings.probeIntervalMs),
     confirmations: Probe.confirmationCount(settings.confirmations)
   });
+  SnmpUI.start(config);
 
   monitoringActive = true;
   document.getElementById('btn-monitoring').classList.add('active');
@@ -3174,6 +3186,7 @@ async function stopMonitoring() {
   if (!window.desktopAPI || !monitoringActive) return;
 
   await window.desktopAPI.monitor.stop();
+  SnmpUI.stop();
   monitoringActive = false;
   document.getElementById('btn-monitoring').classList.remove('active');
 }

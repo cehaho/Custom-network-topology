@@ -91,6 +91,16 @@ La section **SSH host keys** du panneau Admin liste ces entrées (hôte, port, a
 - **Interfaces locales** : `network_local_info` renvoie d’abord les entrées IPv4 (champs inchangés), puis les adresses IPv6 avec `family: "IPv6"`, `prefix` et `scope` (`link` ou `global`). Le formulaire de découverte n’utilise que les entrées IPv4.
 - **Voisins IPv6** : `network_neighbors` lit `ip -6 neigh show` (Linux), `ndp -an` (macOS, BSD) ou `netsh interface ipv6 show neighbors` (Windows). Les entrées incomplètes, en échec, injoignables ou multicast sont ignorées ; une adresse lien-local reçoit la zone de son interface.
 
+## SNMP
+
+Lecture seule, SNMP v2c, activée nœud par nœud (formulaire du nœud ou tableau Admin : case **SNMP**, port, community).
+
+- **Document** : `snmp: { "enabled": true, "port": 161, "version": "2c" }` sur le nœud. Un port invalide redevient 161 ; seule la version `2c` existe.
+- **Community** : c’est un secret. Elle est stockée dans le **trousseau du système**, même service que les secrets SSH (`custom-network-topology`), compte `snmp/<id du nœud>/community`. Le fichier de topologie et les exports ne gardent que le marqueur `snmpSecret: { "type": "community" }`. Une community écrite à la main dans le fichier (`snmp.community`) est déplacée vers le trousseau au chargement ; une community trouvée dans un fichier **importé** est ignorée et doit être ressaisie. Si le trousseau est indisponible, l’enregistrement est refusé.
+- **Relevé** : quand la supervision tourne, les nœuds activés sont interrogés toutes les 30 s (`settings.snmpIntervalSecs`, borné entre 10 et 3600). Client UDP intégré (pas de dépendance système) : délai 1,5 s, une nouvelle tentative. Sont lus `sysName`, `sysDescr`, `sysUpTime`, puis pour au plus 64 interfaces `ifDescr`, `ifName`, `ifOperStatus`, `ifHighSpeed` (sinon `ifSpeed`) et les compteurs `ifHCInOctets`/`ifHCOutOctets` (sinon `ifInOctets`/`ifOutOctets` 32 bits). Le débit (bit/s) vient de la différence entre deux relevés : un compteur 32 bits qui recule a fait un tour, un compteur 64 bits qui recule ou un `sysUpTime` qui baisse (redémarrage) ne donne pas de débit pour cet intervalle.
+- **Affichage** : l’infobulle du nœud montre nom, description, uptime, interfaces actives et les plus chargées. Un lien est coloré et épaissi selon sa charge (vert < 30 %, jaune < 60 %, orange < 85 %, rouge au-delà, par rapport à la vitesse de l’interface) si son interface est connue : `snmpIfIndex` ou `snmpIfName` sur le lien (avec `snmpNodeId` pour l’extrémité concernée ; double-clic sur un lien pour le saisir), ou, à défaut, un nom de port du nœud égal au `ifName` ou `ifDescr`.
+- **Limites** : pas de SNMPv1 ni v3, pas d’écriture. Une community fausse ne produit qu’une absence de réponse (« No SNMP response »). Le client n’a été testé que sur des trames encodées/décodées, pas contre un vrai agent.
+
 ## Structure du projet
 
 ```
@@ -112,6 +122,7 @@ Custom-network-topology/
 │       ├── latency-ui.js   # Infobulle de latence au survol
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
 │       ├── export.js       # Export image : SVG autonome, PNG, boîte d’options
+│       ├── snmp.js         # SNMP : infobulle du nœud, charge des liens, champs du formulaire
 │       ├── admin.js        # Tableau Admin
 │       └── app.js          # Canevas, SSH, découverte, UI de supervision
 ├── scripts/

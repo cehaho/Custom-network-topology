@@ -153,6 +153,7 @@ pub fn contains_secret_values(document: &Value) -> bool {
             || raw_field(object, "sshPassphrase").is_some()
             || object.get("_encrypted").and_then(Value::as_bool) == Some(true)
             || secret_object_value(object).is_some()
+            || crate::snmp::community::has_value(object)
     })
 }
 
@@ -186,6 +187,7 @@ pub fn take_secret_values(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        crate::snmp::community::drop_imported(object);
         if let Some(secret) = take_node_secret(object, legacy_key)? {
             if !is_safe_node_id(&id) {
                 return Err(node_id_message(secret.kind));
@@ -211,6 +213,7 @@ pub fn drop_secret_values(document: &mut Value) {
             .or_else(|| raw_field(object, "sshPass").map(|_| SecretKind::Password))
             .or_else(|| raw_field(object, "sshPassphrase").map(|_| SecretKind::Passphrase));
         scrub_fields(object);
+        crate::snmp::community::scrub(object);
         if let Some(kind) = kind {
             object.insert("sshSecret".to_string(), marker(kind));
         }
@@ -326,7 +329,11 @@ pub fn seal_document(
         ops.push(delete_op(id, SecretKind::Passphrase));
     }
 
-    apply_ops(store, &ops)?;
+    let snmp_undo = crate::snmp::community::seal(&mut document, previous, store)?;
+    if let Err(error) = apply_ops(store, &ops) {
+        crate::snmp::community::undo(store, &snmp_undo);
+        return Err(error);
+    }
 
     if let Some(nodes) = document.get_mut("nodes").and_then(Value::as_array_mut) {
         for (index, _, action) in &plans {

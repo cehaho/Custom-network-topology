@@ -26,6 +26,8 @@ fn main() {
         "actions_open_web",
         "actions_traceroute",
         "actions_wake",
+        "snmp_start",
+        "snmp_stop",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

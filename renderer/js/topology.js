@@ -152,6 +152,7 @@
       if (normalizeActionFields(node)) changed = true;
       if (normalizeNodeProbe(node)) changed = true;
       node.ports = node.ports.map(normalizePort).filter(Boolean);
+      if (normalizeSnmp(node)) changed = true;
     });
 
     const incomingLinks = []
@@ -355,7 +356,69 @@
     if (typeof link.id !== 'string' || !link.id) {
       link.id = 'link_' + (link.targetNodeId || 'x') + '_' + role;
     }
+    normalizeLinkSnmp(link);
     return link;
+  }
+
+  // SNMP fields. Keep aligned with src-tauri/src/snmp/model.rs.
+  // Returns true when the node was changed.
+  function normalizeSnmp(node) {
+    const before = JSON.stringify([node.snmp, node.snmpSecret, node.snmpCommunity, node.snmpCommunityClear]);
+    if (Object.prototype.hasOwnProperty.call(node, 'snmp')) {
+      if (!isObject(node.snmp)) {
+        delete node.snmp;
+      } else {
+        const port = Number(node.snmp.port);
+        const normalized = {
+          enabled: node.snmp.enabled === true,
+          port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 161,
+          version: '2c'
+        };
+        if (typeof node.snmp.community === 'string' && node.snmp.community) {
+          normalized.community = node.snmp.community;
+        }
+        node.snmp = normalized;
+      }
+    }
+    if (node.snmpSecret !== undefined && !(isObject(node.snmpSecret) && node.snmpSecret.type === 'community')) {
+      delete node.snmpSecret;
+    }
+    if (node.snmpCommunity !== undefined && typeof node.snmpCommunity !== 'string') delete node.snmpCommunity;
+    if (node.snmpCommunityClear !== undefined && node.snmpCommunityClear !== true) delete node.snmpCommunityClear;
+    return before !== JSON.stringify([node.snmp, node.snmpSecret, node.snmpCommunity, node.snmpCommunityClear]);
+  }
+
+  function normalizeLinkSnmp(link) {
+    if (link.snmpIfIndex !== undefined) {
+      const index = typeof link.snmpIfIndex === 'string' && /^\s*\d+\s*$/.test(link.snmpIfIndex)
+        ? Number(link.snmpIfIndex)
+        : link.snmpIfIndex;
+      if (Number.isInteger(index) && index >= 1 && index <= 2147483647) link.snmpIfIndex = index;
+      else delete link.snmpIfIndex;
+    }
+    if (link.snmpIfName !== undefined) {
+      const name = typeof link.snmpIfName === 'string' ? link.snmpIfName.trim() : '';
+      // eslint-disable-next-line no-control-regex
+      if (name && Array.from(name).length <= 64 && !/[\u0000-\u001f\u007f-\u009f]/.test(name)) link.snmpIfName = name;
+      else delete link.snmpIfName;
+    }
+    if (link.snmpNodeId !== undefined) {
+      const owner = typeof link.snmpNodeId === 'string' ? link.snmpNodeId : '';
+      if (!owner || (owner !== link.sourceNodeId && owner !== link.targetNodeId)) delete link.snmpNodeId;
+    }
+  }
+
+  function snmpCommunitySaved(node) {
+    return !!(node && isObject(node.snmpSecret) && node.snmpSecret.type === 'community');
+  }
+
+  // Like the SSH fields: a value that was not saved does not become a marker.
+  function stripSnmpCommunity(node) {
+    delete node.snmpCommunity;
+    delete node.snmpCommunityClear;
+    if (isObject(node.snmp)) delete node.snmp.community;
+    if (snmpCommunitySaved(node)) node.snmpSecret = { type: 'community' };
+    else delete node.snmpSecret;
   }
 
   function valueOr(primary, fallback) {
@@ -590,6 +653,7 @@
       if (type) node.sshSecret = { type: type };
       else delete node.sshSecret;
     }
+    stripSnmpCommunity(node);
   }
 
   function withoutSecretValues(document) {
@@ -602,6 +666,7 @@
     return ((document && document.nodes) || []).some((node) => {
       if (!node) return false;
       if (node.sshPass || node.sshPassphrase || node._encrypted === true) return true;
+      if (node.snmpCommunity || (isObject(node.snmp) && node.snmp.community)) return true;
       const secret = node.sshSecret;
       return !!(secret && (secret.value || secret.secret));
     });
@@ -640,6 +705,7 @@
     if (node) {
       delete node.sshSecret;
       delete node.sshSecretClear;
+      delete node.snmpSecret;
     }
   }
 
@@ -685,6 +751,7 @@
     parseBroadcast: parseBroadcast,
     parseWebScheme: parseWebScheme,
     parseWebPort: parseWebPort,
-    normalizeActionFields: normalizeActionFields
+    normalizeActionFields: normalizeActionFields,
+    snmpCommunitySaved: snmpCommunitySaved
   };
 });

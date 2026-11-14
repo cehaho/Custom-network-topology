@@ -12,6 +12,7 @@ mod probe;
 mod probe_kinds;
 mod network;
 mod secrets;
+mod snmp;
 mod ssh;
 mod topology;
 
@@ -300,6 +301,8 @@ pub fn run() {
             actions_open_web,
             actions_traceroute,
             actions_wake,
+            snmp::snmp_start,
+            snmp::snmp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

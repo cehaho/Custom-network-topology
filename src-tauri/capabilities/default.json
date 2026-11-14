@@ -32,6 +32,8 @@
     "allow-image-export",
     "allow-actions-open-web",
     "allow-actions-traceroute",
-    "allow-actions-wake"
+    "allow-actions-wake",
+    "allow-snmp-start",
+    "allow-snmp-stop"
   ]
 }

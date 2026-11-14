@@ -120,6 +120,7 @@ fn migrate(value: Value) -> Value {
         ensure_default_ports(object);
         crate::actions::normalize_action_fields(object);
         crate::probe_kinds::normalize_node(object);
+        crate::snmp::model::normalize_node(object);
         if let Some(Value::Array(ports)) = object.get("ports").cloned() {
             let normalized = ports.iter().filter_map(normalize_port).collect();
             object.insert("ports".to_string(), Value::Array(normalized));
@@ -330,6 +331,7 @@ fn normalize_link(raw: &Value) -> Option<Value> {
         };
         link.insert("id".to_string(), Value::String(fallback));
     }
+    crate::snmp::model::normalize_link(&mut link);
     Some(Value::Object(link))
 }
 
