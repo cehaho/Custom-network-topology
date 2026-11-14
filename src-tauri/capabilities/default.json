@@ -17,6 +17,7 @@
     "allow-ssh-write",
     "allow-ssh-resize",
     "allow-ssh-disconnect",
+    "allow-ssh-forget-host-key",
     "allow-network-local-info",
     "allow-network-ping",
     "allow-network-scan",

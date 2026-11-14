@@ -10,6 +10,7 @@ fn main() {
         "ssh_write",
         "ssh_resize",
         "ssh_disconnect",
+        "ssh_forget_host_key",
         "network_local_info",
         "network_ping",
         "network_scan",

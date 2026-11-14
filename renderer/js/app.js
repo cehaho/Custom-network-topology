@@ -2128,7 +2128,11 @@ async function connectSSH() {
   document.getElementById('terminal-status').textContent = 'Connecting...';
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
-  const result = await window.electronAPI.ssh.connect(connectionInfo);
+  let result = await window.electronAPI.ssh.connect(connectionInfo);
+  if (!result.success && result.hostKey && result.hostKey.status === 'unknown' && confirmUnknownHostKey(result.hostKey)) {
+    connectionInfo.acceptHostKey = result.hostKey.fingerprint;
+    result = await window.electronAPI.ssh.connect(connectionInfo);
+  }
 
   if (result.success) {
     document.getElementById('terminal-status').textContent = 'Connected';
@@ -2139,6 +2143,40 @@ async function connectSSH() {
     document.getElementById('terminal-status').textContent = 'Failed';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-red-600';
     toastError('SSH Connection Failed', result.error);
+    if (result.hostKey && result.hostKey.status === 'mismatch') {
+      await offerToForgetHostKey(result.hostKey);
+    }
+  }
+}
+
+// The fingerprint is shown in full so the user can compare it with the server
+// (for example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+function confirmUnknownHostKey(hostKey) {
+  return window.confirm(
+    `First connection to ${hostKey.host}:${hostKey.port}.\n\n` +
+    `The server presented this host key:\n` +
+    `${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
+    `Only continue if this fingerprint matches the server's.\n` +
+    `OK: trust and remember this key, then connect.\nCancel: do not connect.`
+  );
+}
+
+async function offerToForgetHostKey(hostKey) {
+  const forget = window.confirm(
+    `HOST KEY MISMATCH for ${hostKey.host}:${hostKey.port}.\n\n` +
+    `Stored key:\n${hostKey.storedAlgorithm}\n${hostKey.storedFingerprint}\n\n` +
+    `Presented key:\n${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
+    `Someone may be intercepting the connection. Only forget the stored key ` +
+    `if you know the server's key changed (reinstall, new key).\n\n` +
+    `OK: forget the stored key (you will be asked to verify the new one on the next connection).\n` +
+    `Cancel: keep the stored key.`
+  );
+  if (!forget) return;
+  const removed = await window.electronAPI.ssh.forgetHostKey(hostKey.host, hostKey.port);
+  if (removed && removed.success) {
+    toastSuccess('Host key forgotten', `Connect again to verify the new key of ${hostKey.host}`);
+  } else {
+    toastError('Host key not forgotten', (removed && removed.error) || 'The stored host key was not removed');
   }
 }
 

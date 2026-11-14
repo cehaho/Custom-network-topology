@@ -37,6 +37,7 @@
       write: (nodeId, data) => invoke('ssh_write', { nodeId, data }),
       resize: (nodeId, cols, rows) => invoke('ssh_resize', { nodeId, cols, rows }),
       disconnect: (nodeId) => invoke('ssh_disconnect', { nodeId }),
+      forgetHostKey: (host, port) => invoke('ssh_forget_host_key', { host, port }),
       browseKey: () => invoke('ssh_browse_key'),
       onData: (callback) => subscribe('ssh-data', callback),
       onClosed: (callback) => subscribe('ssh-closed', callback)
