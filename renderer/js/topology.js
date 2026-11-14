@@ -114,6 +114,7 @@
       }
       if (!Array.isArray(node.ports) || node.ports.length === 0) changed = true;
       ensureDefaultPorts(node);
+      if (normalizeActionFields(node)) changed = true;
       node.ports = node.ports.map(normalizePort).filter(Boolean);
     });
 
@@ -226,6 +227,62 @@
     copy.side = typeof port.side === 'string' && port.side ? port.side : 'bottom';
     delete copy.nodeId;
     return copy;
+  }
+
+  // Optional quick-action fields (context menu): `mac`, `wolBroadcast`,
+  // `webUrlScheme`, `webPort`. Keep aligned with src-tauri/src/actions.rs.
+  // A valid value is stored in canonical form, an invalid one is dropped.
+  function parseMac(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim();
+    let hex = null;
+    if (/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(value) || /^[0-9a-f]{2}(-[0-9a-f]{2}){5}$/i.test(value)
+      || /^[0-9a-f]{4}(\.[0-9a-f]{4}){2}$/i.test(value) || /^[0-9a-f]{12}$/i.test(value)) {
+      hex = value.replace(/[^0-9a-f]/gi, '').toLowerCase();
+    }
+    if (!hex || hex === '000000000000' || (parseInt(hex.slice(0, 2), 16) & 1) === 1) return null;
+    return hex.match(/../g).join(':');
+  }
+
+  function parseBroadcast(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim();
+    const octet = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+    if (!new RegExp('^' + octet + '(\\.' + octet + '){3}$').test(value)) return null;
+    const first = parseInt(value.split('.')[0], 10);
+    if (value === '0.0.0.0' || (first >= 224 && first <= 239)) return null;
+    return value;
+  }
+
+  function parseWebScheme(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim().toLowerCase();
+    return value === 'http' || value === 'https' ? value : null;
+  }
+
+  function parseWebPort(value) {
+    const text = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+    if (!/^\d{1,5}$/.test(text)) return null;
+    const port = parseInt(text, 10);
+    return port >= 1 && port <= 65535 ? port : null;
+  }
+
+  const ACTION_FIELDS = { mac: parseMac, wolBroadcast: parseBroadcast, webUrlScheme: parseWebScheme, webPort: parseWebPort };
+
+  function normalizeActionFields(node) {
+    let changed = false;
+    Object.keys(ACTION_FIELDS).forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(node, key)) return;
+      const parsed = ACTION_FIELDS[key](node[key]);
+      if (parsed === null) {
+        delete node[key];
+        changed = true;
+      } else if (parsed !== node[key]) {
+        node[key] = parsed;
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   function linkNeedsRewrite(rawLink) {
@@ -464,6 +521,10 @@
     ['isContainer', 'containerType', 'zones', 'containerId', 'zoneId', 'expanded'].forEach((key) => {
       if (source[key] !== undefined) node[key] = source[key];
     });
+    Object.keys(ACTION_FIELDS).forEach((key) => {
+      const parsed = source[key] === undefined || source[key] === null ? null : ACTION_FIELDS[key](source[key]);
+      if (parsed !== null) node[key] = parsed;
+    });
     return node;
   }
 
@@ -574,6 +635,11 @@
     secretHint: secretHint,
     acceptSecretEdit: acceptSecretEdit,
     clearStoredSecret: clearStoredSecret,
-    forgetInheritedSecret: forgetInheritedSecret
+    forgetInheritedSecret: forgetInheritedSecret,
+    parseMac: parseMac,
+    parseBroadcast: parseBroadcast,
+    parseWebScheme: parseWebScheme,
+    parseWebPort: parseWebPort,
+    normalizeActionFields: normalizeActionFields
   };
 });

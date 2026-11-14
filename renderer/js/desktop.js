@@ -55,6 +55,11 @@
       stop: () => invoke('monitor_stop'),
       onStatus: (callback) => subscribe('monitor-status', callback)
     },
+    actions: {
+      openWeb: (address, scheme, port) => invoke('actions_open_web', { address, scheme, port }),
+      traceroute: (host) => invoke('actions_traceroute', { host }),
+      wake: (mac, broadcast) => invoke('actions_wake', { mac, broadcast })
+    },
     platform,
     isDesktop: true
   };

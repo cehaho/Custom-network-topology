@@ -1778,6 +1778,7 @@ function showNodeContextMenu(e, node) {
     addToContainerItems.innerHTML = '';
   }
 
+  QuickActions.prepareMenu(node);
   menu.classList.remove('hidden');
   lucide.createIcons();
 }
@@ -1811,6 +1812,34 @@ async function pingNodeFromContext() {
   } else {
     toastError('Ping Failed', `${contextMenuNode.address} did not respond (${result.duration}ms)`);
   }
+}
+
+function copyAddressFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.copyAddress(node);
+}
+
+function openWebFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.openWeb(node);
+}
+
+function tracerouteFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.traceroute(node);
+}
+
+function wakeFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.wake(node);
 }
 
 function showStatusHistoryFromContext() {
@@ -2286,6 +2315,7 @@ function openNodeModal(node = null) {
   const sshAuth = node && (node.sshAuth === 'key' || secretType === 'passphrase') ? 'key' : 'password';
   document.getElementById('node-ssh-auth').value = sshAuth;
   document.getElementById('node-ssh-key-path').value = node && node.sshKeyPath ? node.sshKeyPath : '';
+  QuickActions.fillNodeForm(node);
   nodeSecretClear = false;
   refreshNodeSecretHint(node);
   toggleNodeSshAuth();
@@ -2658,6 +2688,8 @@ async function saveNode() {
   const zoneId = document.getElementById('node-zone')?.value || null;
 
   if (!validateNodeForm()) return;
+  const actionFields = QuickActions.readNodeForm();
+  if (!actionFields) return;
 
   const newNodeId = id || 'node_' + Date.now();
 
@@ -2699,6 +2731,7 @@ async function saveNode() {
   delete nodeData.sshPassphrase;
   delete nodeData._encrypted;
   delete nodeData.sshSecretClear;
+  QuickActions.applyNodeFields(nodeData, actionFields);
   if (sshKeyPath) nodeData.sshKeyPath = sshKeyPath;
   else delete nodeData.sshKeyPath;
   if (nodeSecretClear) {
@@ -2954,6 +2987,7 @@ async function addDiscoveredNodes() {
       id: 'node_' + Date.now() + '_' + idx,
       name: `Device ${host.ip}`,
       address: host.ip,
+      mac: host.mac || undefined,
       icon: 'circle',
       iconType: 'lucide',
       x: (col * 10) + 5,

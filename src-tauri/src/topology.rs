@@ -113,6 +113,7 @@ fn migrate(value: Value) -> Value {
             continue;
         };
         ensure_default_ports(object);
+        crate::actions::normalize_action_fields(object);
         if let Some(Value::Array(ports)) = object.get("ports").cloned() {
             let normalized = ports.iter().filter_map(normalize_port).collect();
             object.insert("ports".to_string(), Value::Array(normalized));

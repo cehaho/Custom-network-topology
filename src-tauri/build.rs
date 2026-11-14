@@ -18,6 +18,9 @@ fn main() {
         "network_neighbors",
         "monitor_start",
         "monitor_stop",
+        "actions_open_web",
+        "actions_traceroute",
+        "actions_wake",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()
