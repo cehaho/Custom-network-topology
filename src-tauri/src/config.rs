@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
-use crate::secrets::{SecretStore, SecretValue};
+use crate::secrets::SecretValue;
 
 const MAX_CONFIG_BYTES: usize = 5 * 1024 * 1024;
 const SAMPLE: &str = include_str!("../../renderer/config.json");

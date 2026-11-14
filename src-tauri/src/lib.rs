@@ -52,9 +52,9 @@ fn config_save(
     result
 }
 
-fn pending_import(
-    state: &tauri::State<'_, AppState>,
-) -> std::sync::MutexGuard<'_, Option<PendingImport>> {
+fn pending_import<'a>(
+    state: &'a tauri::State<'_, AppState>,
+) -> std::sync::MutexGuard<'a, Option<PendingImport>> {
     state
         .pending_import
         .lock()
