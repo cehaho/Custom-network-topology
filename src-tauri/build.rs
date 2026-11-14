@@ -15,6 +15,7 @@ fn main() {
         "network_ping",
         "network_scan",
         "network_arp",
+        "network_neighbors",
         "monitor_start",
         "monitor_stop",
     ];

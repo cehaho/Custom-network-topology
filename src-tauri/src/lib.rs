@@ -175,6 +175,11 @@ async fn network_arp() -> Value {
 }
 
 #[tauri::command]
+async fn network_neighbors() -> Value {
+    Value::Array(network::ipv6_neighbors().await)
+}
+
+#[tauri::command]
 async fn monitor_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -231,6 +236,7 @@ pub fn run() {
             network_ping,
             network_scan,
             network_arp,
+            network_neighbors,
             monitor_start,
             monitor_stop,
         ])

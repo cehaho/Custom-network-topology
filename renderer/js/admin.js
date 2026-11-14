@@ -207,7 +207,7 @@
         <td class="p-3 align-top"><input data-field="name" data-index="${index}" value="${escapeHtml(host.name)}" class="bg-slate-900 border border-slate-600 rounded px-3 py-2 w-full text-sm text-slate-200"></td>
         <td class="p-3 align-top">
           <div class="flex gap-2">
-            <input data-field="address" data-index="${index}" value="${escapeHtml(host.address)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-28 text-sm font-mono" placeholder="IP">
+            <input data-field="address" data-index="${index}" value="${escapeHtml(host.address)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-40 text-sm font-mono" placeholder="IPv4 / IPv6">
             <input data-field="port" data-index="${index}" value="${host.port || ''}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-16 text-sm font-mono" placeholder="Port">
           </div>
         </td>

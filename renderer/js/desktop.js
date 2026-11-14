@@ -47,6 +47,7 @@
       ping: (host) => invoke('network_ping', { host }),
       scan: (baseIp, startRange, endRange) => invoke('network_scan', { baseIp, startRange, endRange }),
       arp: () => invoke('network_arp'),
+      neighbors: () => invoke('network_neighbors'),
       onScanProgress: (callback) => subscribe('network-scan-progress', callback)
     },
     monitor: {

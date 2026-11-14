@@ -711,7 +711,7 @@ function renderTree(nodes) {
           </div>
           <div class="child-node-info">
             <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
-            <div class="child-node-address">${escapeHtml(child.address || '')}</div>
+            <div class="child-node-address" title="${escapeHtml(child.address || '')}">${escapeHtml(child.address || '')}</div>
           </div>
           <div class="child-node-status ${childView.className}">
             ${childView.short}
@@ -2634,7 +2634,9 @@ async function browseNodeSshKey() {
 async function saveNode() {
   const id = document.getElementById('node-edit-id').value;
   const name = document.getElementById('node-name').value.trim();
-  const address = document.getElementById('node-address').value.trim();
+  // `[::1]` is stored as `::1`; validateNodeForm rejects anything else invalid.
+  const typedAddress = document.getElementById('node-address').value.trim();
+  const address = (typedAddress && Hosts.normalizeHost(typedAddress)) || typedAddress;
   const port = document.getElementById('node-port').value.trim();
   const iconType = document.getElementById('node-icon-type').value;
   const icon = document.getElementById('node-icon').value;
@@ -2769,7 +2771,10 @@ async function openDiscoveryModal() {
   }
 
   // Get network interfaces
-  networkInterfaces = await window.desktopAPI.network.getLocalInfo();
+  // The range scan is IPv4 only; IPv6 entries (family "IPv6") are skipped
+  // here. IPv6 hosts come from the neighbour table after the scan.
+  const localInfo = await window.desktopAPI.network.getLocalInfo();
+  networkInterfaces = (Array.isArray(localInfo) ? localInfo : []).filter((iface) => iface.family !== 'IPv6');
   const select = document.getElementById('discovery-interface');
   select.innerHTML = '';
 
@@ -2886,9 +2891,23 @@ async function startNetworkScan() {
     };
   });
 
+  // IPv6 hosts: a subnet sweep is not feasible, so read the neighbour table.
+  // They start unselected (link-local entries are often duplicates of an
+  // IPv4 host already found).
+  let neighbors = [];
+  try {
+    neighbors = window.desktopAPI.network.neighbors ? await window.desktopAPI.network.neighbors() : [];
+  } catch (error) {
+    neighbors = [];
+  }
+  (Array.isArray(neighbors) ? neighbors : []).forEach((entry) => {
+    if (!entry || !Hosts.isIpv6(entry.ip)) return;
+    discoveredHosts.push({ ip: entry.ip, mac: entry.mac || null, selected: false, ipv6: true });
+  });
+
   // Filter out already configured hosts
-  const configuredIps = config.nodes.map(n => n.address);
-  discoveredHosts = discoveredHosts.filter(h => !configuredIps.includes(h.ip));
+  const configuredIps = config.nodes.map(n => String(n.address || '').toLowerCase());
+  discoveredHosts = discoveredHosts.filter(h => !configuredIps.includes(h.ip.toLowerCase()));
 
   document.getElementById('discovery-text').textContent = `Found ${discoveredHosts.length} new hosts`;
   document.getElementById('discovery-progress-bar').style.width = '100%';
@@ -2914,8 +2933,9 @@ function renderDiscoveryResults() {
     div.innerHTML = `
       <div>
         <input type="checkbox" ${host.selected ? 'checked' : ''} onchange="discoveredHosts[${idx}].selected = this.checked" class="mr-2">
-        <span class="font-mono text-sm">${host.ip}</span>
-        ${host.mac ? `<span class="text-xs text-slate-500 ml-2">${host.mac}</span>` : ''}
+        <span class="font-mono text-sm">${escapeHtml(host.ip)}</span>
+        ${host.mac ? `<span class="text-xs text-slate-500 ml-2">${escapeHtml(host.mac)}</span>` : ''}
+        ${host.ipv6 ? '<span class="text-xs text-slate-500 ml-2">IPv6 neighbour</span>' : ''}
       </div>
     `;
     container.appendChild(div);
@@ -3411,22 +3431,10 @@ function toastInfo(title, message) { return showToast('info', title, message); }
 // Input Validation
 // ============================================
 
-function isValidIP(ip) {
-  if (!ip) return false;
-  const parts = ip.split('.');
-  if (parts.length !== 4) return false;
-  return parts.every(part => {
-    const num = parseInt(part, 10);
-    return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
-  });
-}
-
+// IPv4, IPv6 (optionally `[bracketed]`, or `fe80::1%eth0` on link-local), or
+// a hostname. Same rules as the backend (renderer/js/hosts.js).
 function isValidHostname(hostname) {
-  if (!hostname) return false;
-  // Allow IP addresses and valid hostnames
-  if (isValidIP(hostname)) return true;
-  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-  return hostnameRegex.test(hostname);
+  return !!hostname && Hosts.normalizeHost(hostname) !== null;
 }
 
 function isValidPort(port) {
@@ -3447,7 +3455,7 @@ function validateNodeForm() {
   }
 
   if (address && !isValidHostname(address)) {
-    toastError('Validation Error', 'Invalid IP address or hostname');
+    toastError('Validation Error', 'Invalid IPv4/IPv6 address or hostname');
     document.getElementById('node-address').focus();
     return false;
   }

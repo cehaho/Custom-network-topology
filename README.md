@@ -37,7 +37,7 @@ npm start
 
 - Déplacer les nœuds, panoramiquer le fond, zoomer à la molette.
 - **Admin** édite le **même document** de topologie que le canevas, dans la même fenêtre. Une sauvegarde conserve les liens, ports, conteneurs et zones VLAN.
-- **Découvrir** envoie un ping sur une plage IPv4 (1–254) et lit la table ARP locale.
+- **Découvrir** envoie un ping sur une plage IPv4 (1–254) et lit la table ARP locale. Les voisins IPv6 sont ensuite lus dans la table des voisins du système (voir [IPv6](#ipv6)) et proposés, décochés, dans la liste.
 - **Supervision** : chaque nœud est sondé (ping ICMP, ou connexion TCP si un port est défini). L’intervalle par défaut est de 5 s (`settings.probeIntervalMs`). L’état reste `unknown` jusqu’à deux résultats concordants (`settings.confirmations`) ; un seul échec ne bascule pas le nœud. Au plus une vingtaine de sondes tournent en parallèle. L’historique court est écrit à part dans `status.json`.
 - **Lien actif / secours** : si un nœud a un lien `primary` et un lien `failover`, le lien actif est le primaire tant que le voisin primaire répond ; sinon le secours si son voisin répond ; sinon le primaire (en panne). Seul le lien actif est animé. Le secours reste visible, en attente, tant que le primaire répond.
 - Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
@@ -56,7 +56,15 @@ Une installation neuve utilise le répertoire de config Tauri pour `com.custom.n
 
 Les mots de passe SSH et les passphrases de clé **ne sont pas** écrits dans ce fichier. Chacun est stocké dans le **trousseau du système** (service `custom-network-topology`, compte du type `ssh/<id du nœud>/password` ou `ssh/<id du nœud>/passphrase`). Le fichier de topologie ne conserve que `sshSecret.type` (`password` ou `passphrase`) lorsqu’un secret existe. Si le trousseau est indisponible, l’enregistrement d’un mot de passe est refusé : il n’est pas écrit en clair. Un mot de passe déjà scellé en `enc:v1:` est déplacé vers le trousseau au prochain chargement réussi. Une valeur écrite par le safe storage d’Electron ne peut pas être déchiffrée ; le fichier reste inchangé et l’application le signale.
 
-Les clés d’hôte SSH acceptées sont dans `known_hosts.json`, dans le même dossier que le fichier de topologie. Chaque entrée `hôte:port` contient l’algorithme, l’empreinte SHA256 et la clé publique complète. Ce fichier ne contient aucun secret.
+Les clés d’hôte SSH acceptées sont dans `known_hosts.json`, dans le même dossier que le fichier de topologie. Chaque entrée `hôte:port` contient l’algorithme, l’empreinte SHA256 et la clé publique complète. Pour une adresse IPv6, la clé est `[adresse]:port` (par exemple `[2001:db8::1]:22`), avec l’adresse sous sa forme canonique compressée en minuscules ; les entrées IPv4 et nom d’hôte existantes gardent leur format. Ce fichier ne contient aucun secret.
+
+## IPv6
+
+- **Adresse d’un nœud** : une IPv4, un nom d’hôte, ou une IPv6 littérale — complète (`2001:db8:0:0:0:0:0:1`), compressée (`2001:db8::1`, `::1`) ou avec IPv4 embarquée (`::ffff:192.0.2.1`). Une zone (`fe80::1%eth0`, `fe80::1%12` sous Windows) n’est acceptée que sur une adresse lien-local (`fe80::/10`). La forme entre crochets `[::1]` est acceptée à la saisie et enregistrée sans crochets. Les mêmes règles sont appliquées dans la fenêtre (`renderer/js/hosts.js`) et dans le backend (`src-tauri/src/hosts.rs`) ; aucune valeur ne passe par un shell, et espaces, métacaractères et `-` initial restent refusés.
+- **Ping** : une cible IPv6 utilise `ping -6` sous Linux et Windows, `ping6` sous macOS et BSD. Un nom d’hôte garde le `ping` par défaut du système.
+- **Sonde TCP et SSH** : la connexion se fait vers le couple (hôte, port), jamais vers une chaîne `hôte:port` ambiguë. Une adresse lien-local avec zone passe par le résolveur du système.
+- **Interfaces locales** : `network_local_info` renvoie d’abord les entrées IPv4 (champs inchangés), puis les adresses IPv6 avec `family: "IPv6"`, `prefix` et `scope` (`link` ou `global`). Le formulaire de découverte n’utilise que les entrées IPv4.
+- **Voisins IPv6** : `network_neighbors` lit `ip -6 neigh show` (Linux), `ndp -an` (macOS, BSD) ou `netsh interface ipv6 show neighbors` (Windows). Les entrées incomplètes, en échec, injoignables ou multicast sont ignorées ; une adresse lien-local reçoit la zone de son interface.
 
 ## Structure du projet
 
@@ -65,7 +73,7 @@ Custom-network-topology/
 ├── src-tauri/              # Commandes Tauri : config, SSH, ping, scan, sondes, secrets
 ├── tailwind.config.js      # Fichiers scannés par Tailwind (renderer/**/*.html, renderer/js/**/*.js)
 ├── tailwind.css            # Entrée Tailwind (base, components, utilities)
-├── lib/hosts.js            # Contrôles hôte / port / plage (mirroir Rust)
+├── lib/hosts.js            # Réexporte renderer/js/hosts.js pour les tests Node
 ├── renderer/
 │   ├── index.html          # Fenêtre topologie
 │   ├── admin.html          # Éditeur de nœuds (même document)
@@ -73,6 +81,7 @@ Custom-network-topology/
 │   └── js/
 │       ├── desktop.js      # window.desktopAPI branché sur Tauri
 │       ├── topology.js     # Document de topologie partagé
+│       ├── hosts.js        # Contrôles hôte (IPv4, IPv6, nom) / port / plage, miroir de hosts.rs
 │       ├── probe.js        # Confirmation d’état et lien actif
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
 │       ├── admin.js        # Tableau Admin
@@ -134,7 +143,7 @@ Le canevas et le tableau Admin lisent et écrivent **un seul** document :
 }
 ```
 
-`address` est une IPv4 ou un nom d’hôte. Un `port` numérique fait utiliser le TCP au lieu du ping. Les positions sont des pourcentages. Un câble est un `link` (`primary` ou `failover`) entre deux ports de nœuds. Les anciens `primaryParentId` / `secondaryParentId`, et l’ancien tableau `connections`, deviennent des `links` au premier chargement. Conteneurs et zones VLAN restent sur leurs nœuds. Les réglages SSH d’un nœud sont le port, l’utilisateur, le mode d’auth (`password` ou `key`), et le chemin de clé optionnel. Un secret enregistré n’apparaît que comme `sshSecret: { "type": "password" }` ou `"passphrase"`. Le secret lui-même n’est pas dans ce document.
+`address` est une IPv4, une IPv6 ou un nom d’hôte. Un `port` numérique fait utiliser le TCP au lieu du ping. Les positions sont des pourcentages. Un câble est un `link` (`primary` ou `failover`) entre deux ports de nœuds. Les anciens `primaryParentId` / `secondaryParentId`, et l’ancien tableau `connections`, deviennent des `links` au premier chargement. Conteneurs et zones VLAN restent sur leurs nœuds. Les réglages SSH d’un nœud sont le port, l’utilisateur, le mode d’auth (`password` ou `key`), et le chemin de clé optionnel. Un secret enregistré n’apparaît que comme `sshSecret: { "type": "password" }` ou `"passphrase"`. Le secret lui-même n’est pas dans ce document.
 
 Une sauvegarde est refusée si le JSON n’a pas de tableau `nodes` ni de `schemaVersion` supporté. Le nouveau fichier est écrit dans un temporaire du même dossier, puis renommé. Le fichier précédent est conservé en `config.json.bak`. L’import affiche le nombre de nœuds, de liens et la version, et demande confirmation avant de remplacer le document ouvert.
 
@@ -156,7 +165,9 @@ Couvre la validation des hôtes, le document de topologie, la confirmation de so
 
 ## Limites
 
-- Découverte et supervision en IPv4 uniquement.
+- Le balayage de plage de la découverte reste IPv4 (base `a.b.c`, 1–254) : balayer un sous-réseau IPv6 (2^64 adresses) n’est pas faisable. En IPv6, la découverte ne voit que les hôtes déjà présents dans la table des voisins du système (ceux avec lesquels la machine a récemment échangé) ; l’ARP reste IPv4.
+- Un nom d’hôte qui ne se résout qu’en IPv6 (AAAA seul) est pingé avec le `ping` par défaut ; sous macOS, ce `ping` est IPv4 seul et le nœud apparaît hors ligne. Saisissez l’adresse IPv6, ou définissez un port pour une sonde TCP.
+- Le support IPv6 du ping, des sondes, du SSH et des tables de voisins n’est testé que par l’analyse des arguments et des sorties de commandes, pas sur un vrai réseau IPv6.
 - Le canevas n’est testé que par sa géométrie. Le rendu DOM/SVG réel, les événements souris (glisser, déposer dans un conteneur, création de lien) et l’aspect visuel ne sont pas testés automatiquement.
 
 ## Licence

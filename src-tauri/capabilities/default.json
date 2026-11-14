@@ -22,6 +22,7 @@
     "allow-network-ping",
     "allow-network-scan",
     "allow-network-arp",
+    "allow-network-neighbors",
     "allow-monitor-start",
     "allow-monitor-stop"
   ]
