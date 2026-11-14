@@ -464,6 +464,8 @@ function setupEventListeners() {
     document.getElementById('btn-minimap').classList.remove('active');
   });
 
+  bindPageControls();
+
   // Search and filter
   document.getElementById('node-search').addEventListener('input', applyNodeFilter);
   document.getElementById('node-filter-status').addEventListener('change', applyNodeFilter);
@@ -483,6 +485,63 @@ function setupEventListeners() {
     } else if (config.nodes.length) {
       renderTree(config.nodes);
     }
+  });
+}
+
+// Buttons, selects and menu entries of index.html (no inline handlers there).
+function bindPageControls() {
+  document.querySelectorAll('[data-close-modal]').forEach((button) => {
+    button.addEventListener('click', () => closeModal(button.dataset.closeModal));
+  });
+  document.querySelectorAll('[data-toggle-panel]').forEach((header) => {
+    header.addEventListener('click', () => togglePanel(header.dataset.togglePanel));
+  });
+
+  const actions = {
+    'browse-ssh-key': browseSSHKey,
+    'connect-ssh': connectSSH,
+    'start-scan': startNetworkScan,
+    'add-discovered': addDiscoveredNodes,
+    'add-container-zone': addContainerZone,
+    'browse-node-ssh-key': browseNodeSshKey,
+    'clear-node-secret': clearNodeSecretField,
+    'clear-snmp-community': () => SnmpUI.clearFormCommunity(),
+    'add-node-port': addNodePort,
+    'save-node': saveNode
+  };
+  document.querySelectorAll('[data-action]').forEach((el) => {
+    const handler = actions[el.dataset.action];
+    if (handler) el.addEventListener('click', () => handler());
+  });
+
+  document.getElementById('ssh-auth-type').addEventListener('change', () => toggleSSHAuthFields());
+  document.getElementById('node-is-container').addEventListener('change', () => toggleContainerOptions());
+  document.getElementById('node-parent-container').addEventListener('change', () => updateZoneDropdown());
+  document.getElementById('node-ssh-auth').addEventListener('change', () => toggleNodeSshAuth());
+
+  const contextActions = {
+    ssh: openSSHFromContext,
+    edit: editNodeFromContext,
+    ping: pingNodeFromContext,
+    traceroute: tracerouteFromContext,
+    'copy-address': copyAddressFromContext,
+    'open-web': openWebFromContext,
+    wake: wakeFromContext,
+    'status-history': showStatusHistoryFromContext,
+    'toggle-container': toggleContainerFromContext,
+    'remove-from-container': removeFromContainerFromContext,
+    delete: deleteNodeFromContext
+  };
+  document.querySelectorAll('[data-context-action]').forEach((item) => {
+    const handler = contextActions[item.dataset.contextAction];
+    if (handler) item.addEventListener('click', () => handler());
+  });
+}
+
+// A node icon given as an image URL disappears when it fails to load.
+function hideBrokenImages(el) {
+  el.querySelectorAll('img[data-hide-on-error]').forEach((img) => {
+    img.addEventListener('error', () => { img.style.display = 'none'; });
   });
 }
 
@@ -645,7 +704,7 @@ function renderTree(nodes) {
   // Helper function to generate icon HTML
   function generateIconHtml(node) {
     if (node.iconType === 'url') {
-      return `<img src="${escapeHtml(node.icon || '')}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
+      return `<img src="${escapeHtml(node.icon || '')}" class="w-full h-full object-cover" data-hide-on-error>`;
     }
     if (node.iconType === 'svg') {
       return sanitizeSvg(node.icon) || '<i data-lucide="help-circle" class="w-8 h-8"></i>';
@@ -738,7 +797,7 @@ function renderTree(nodes) {
 
           childrenHtml += `
             <div class="vlan-zone" data-zone-id="${escapeHtml(zone.id)}">
-              <div class="vlan-zone-header" onclick="toggleZoneCollapse('${jsAttr(node.id)}', '${jsAttr(zone.id)}')">
+              <div class="vlan-zone-header" data-toggle-zone="${escapeHtml(zone.id)}">
                 <div class="vlan-zone-header-left">
                   <span class="vlan-zone-badge" style="background: ${zoneColor}20; color: ${zoneColor}; border: 1px solid ${zoneColor}40;">
                     VLAN ${escapeHtml(zone.vlanId)}
@@ -792,7 +851,7 @@ function renderTree(nodes) {
       ${portsHtml}
       <div class="container-header">
         <div class="container-header-left">
-          <button class="container-toggle" onclick="toggleContainerExpand('${node.id}')">
+          <button class="container-toggle">
             <i data-lucide="${isExpanded ? 'chevron-down' : 'chevron-right'}" class="w-4 h-4"></i>
           </button>
           <div class="container-icon">
@@ -822,6 +881,11 @@ function renderTree(nodes) {
     `;
 
     // Event listeners for container
+    hideBrokenImages(el);
+    el.querySelector('.container-toggle').addEventListener('click', () => toggleContainerExpand(node.id));
+    el.querySelectorAll('[data-toggle-zone]').forEach((header) => {
+      header.addEventListener('click', () => toggleZoneCollapse(node.id, header.dataset.toggleZone));
+    });
     el.addEventListener('mousedown', (e) => {
       if (e.target.classList.contains('port-handle')) return;
       if (e.target.closest('.container-toggle')) return;
@@ -911,6 +975,7 @@ function renderTree(nodes) {
     `;
 
     // Event listeners for node interaction
+    hideBrokenImages(el);
     el.addEventListener('mousedown', (e) => {
       // Don't start node drag if clicking on a port
       if (e.target.classList.contains('port-handle')) return;
@@ -1735,11 +1800,14 @@ function showNodeContextMenu(e, node) {
   if (!node.isContainer && !node.containerId && containers.length > 0) {
     addToContainerSection.classList.remove('hidden');
     addToContainerItems.innerHTML = containers.map(c => `
-      <div class="context-menu-item" onclick="addToContainerFromContext('${jsAttr(c.id)}')">
+      <div class="context-menu-item" data-add-to-container="${escapeHtml(c.id)}">
         <i data-lucide="log-in" class="w-4 h-4"></i>
         <span>Add to ${escapeHtml(c.name)}</span>
       </div>
     `).join('');
+    addToContainerItems.querySelectorAll('[data-add-to-container]').forEach((item) => {
+      item.addEventListener('click', () => addToContainerFromContext(item.dataset.addToContainer));
+    });
   } else {
     addToContainerSection.classList.add('hidden');
     addToContainerItems.innerHTML = '';
@@ -2449,25 +2517,32 @@ function renderContainerZonesList() {
   let html = '';
   editingContainerZones.forEach((zone) => {
     const zoneColor = safeCssColor(zone.color);
-    const zoneDomId = jsAttr(zone.id);
+    const zoneDomId = escapeHtml(zone.id);
     html += `
-      <div class="flex items-center gap-2 p-2 bg-slate-800 rounded mb-2">
+      <div class="flex items-center gap-2 p-2 bg-slate-800 rounded mb-2" data-zone-id="${zoneDomId}">
         <input type="color" value="${zoneColor}"
-               onchange="updateContainerZone('${zoneDomId}', 'color', this.value)"
+               data-zone-field="color"
                class="w-8 h-8 rounded cursor-pointer border-0" style="padding: 0;">
         <input type="number" value="${escapeHtml(zone.vlanId)}" placeholder="VLAN ID"
-               onchange="updateContainerZone('${zoneDomId}', 'vlanId', this.value)"
+               data-zone-field="vlanId"
                class="w-20 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
         <input type="text" value="${escapeHtml(zone.name)}" placeholder="Zone name"
-               onchange="updateContainerZone('${zoneDomId}', 'name', this.value)"
+               data-zone-field="name"
                class="flex-1 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
-        <button onclick="removeContainerZone('${zoneDomId}')" class="p-1 text-red-400 hover:text-red-300">
+        <button data-zone-remove class="p-1 text-red-400 hover:text-red-300">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
       </div>
     `;
   });
   container.innerHTML = html;
+  container.querySelectorAll('[data-zone-id]').forEach((row) => {
+    const zoneId = row.dataset.zoneId;
+    row.querySelectorAll('[data-zone-field]').forEach((input) => {
+      input.addEventListener('change', () => updateContainerZone(zoneId, input.dataset.zoneField, input.value));
+    });
+    row.querySelector('[data-zone-remove]').addEventListener('click', () => removeContainerZone(zoneId));
+  });
   lucide.createIcons();
 }
 
@@ -2549,19 +2624,23 @@ function renderNodePortsList() {
     div.className = 'flex items-center gap-2 p-2 bg-slate-800 rounded';
     div.innerHTML = `
       <input type="text" value="${escapeHtml(port.name)}" placeholder="Name"
-             onchange="updateNodePort(${idx}, 'name', this.value)"
+             data-port-field="name"
              class="flex-1 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
-      <select onchange="updateNodePort(${idx}, 'side', this.value)"
+      <select data-port-field="side"
               class="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
         <option value="top" ${port.side === 'top' ? 'selected' : ''}>Top</option>
         <option value="bottom" ${port.side === 'bottom' ? 'selected' : ''}>Bottom</option>
         <option value="left" ${port.side === 'left' ? 'selected' : ''}>Left</option>
         <option value="right" ${port.side === 'right' ? 'selected' : ''}>Right</option>
       </select>
-      <button onclick="removeNodePort(${idx})" class="p-1 text-red-400 hover:text-red-300">
+      <button data-port-remove class="p-1 text-red-400 hover:text-red-300">
         <i data-lucide="trash-2" class="w-4 h-4"></i>
       </button>
     `;
+    div.querySelectorAll('[data-port-field]').forEach((input) => {
+      input.addEventListener('change', () => updateNodePort(idx, input.dataset.portField, input.value));
+    });
+    div.querySelector('[data-port-remove]').addEventListener('click', () => removeNodePort(idx));
     container.appendChild(div);
   });
 
@@ -3264,21 +3343,6 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-function escapeJs(value) {
-  return String(value || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/"/g, '\\"')
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/\r/g, '')
-    .replace(/\n/g, '');
-}
-
-function jsAttr(value) {
-  return escapeHtml(escapeJs(value));
-}
-
 function safeLucideName(name) {
   return /^[a-z0-9-]+$/i.test(name || '') ? name : 'circle';
 }
@@ -3330,13 +3394,14 @@ function showToast(type, title, message, duration = 4000) {
       <div class="toast-title">${escapeHtml(title)}</div>
       ${message ? `<div class="toast-message">${escapeHtml(message)}</div>` : ''}
     </div>
-    <div class="toast-close" onclick="this.parentElement.remove()">
+    <div class="toast-close">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M18 6L6 18M6 6l12 12"/>
       </svg>
     </div>
   `;
 
+  toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
   container.appendChild(toast);
 
   // Auto-dismiss

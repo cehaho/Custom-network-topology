@@ -738,3 +738,5 @@ select option { background: var(--bg-input); color: var(--text-primary); }
 .node-container.search-current, .child-node.search-current { box-shadow: 0 0 0 3px #facc15, 0 0 24px rgba(250, 204, 21, 0.5); }
 #connections-layer .search-dim { opacity: 0.12; }
 #node-search-count.search-count-empty { color: #f87171; }
+#node-search { border: 1px solid rgba(255,255,255,0.1); }
+#node-search:focus { border-color: #3b82f6; }

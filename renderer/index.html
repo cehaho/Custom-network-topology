@@ -88,8 +88,7 @@
         <i data-lucide="search" class="w-4 h-4" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #64748b; pointer-events: none;"></i>
         <input type="text" id="node-search" placeholder="Search nodes... (Ctrl+F)" spellcheck="false" autocomplete="off"
                title="Name, address or type. Filters: status:down vlan:10 zone:dmz type:server ip:10.0. -type:docker. Enter / arrows: next match, Esc: clear"
-               style="padding: 6px 10px 6px 32px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; width: 200px; outline: none;"
-               onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'">
+               style="padding: 6px 10px 6px 32px; border-radius: 6px; background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; width: 200px; outline: none;">
       </div>
       <span id="node-search-count" class="hidden text-xs text-slate-500 font-mono" title="Current match / matches"></span>
       <select id="node-filter-status" style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; outline: none; cursor: pointer;">
@@ -137,7 +136,7 @@
     <div id="sidebar">
       <!-- Host Status Panel -->
       <div class="sidebar-panel">
-        <div class="panel-header" onclick="togglePanel('host-list')">
+        <div class="panel-header" data-toggle-panel="host-list">
           <span><i data-lucide="server" class="w-4 h-4 inline mr-2"></i>Host Status</span>
           <span id="host-count" class="text-xs bg-slate-800 px-2 py-0.5 rounded">0</span>
         </div>
@@ -174,7 +173,7 @@
   <div class="modal">
     <div class="modal-header">
       <h3><i data-lucide="terminal" class="w-5 h-5 inline mr-2"></i>SSH Connection</h3>
-      <button onclick="closeModal('ssh-modal')" class="text-slate-400 hover:text-white">
+      <button data-close-modal="ssh-modal" class="text-slate-400 hover:text-white">
         <i data-lucide="x" class="w-5 h-5"></i>
       </button>
     </div>
@@ -193,7 +192,7 @@
       </div>
       <div class="form-group">
         <label class="form-label">Authentication</label>
-        <select id="ssh-auth-type" class="form-input" onchange="toggleSSHAuthFields()">
+        <select id="ssh-auth-type" class="form-input">
           <option value="password">Password</option>
           <option value="key">Private Key</option>
         </select>
@@ -207,7 +206,7 @@
         <label class="form-label">Private Key</label>
         <div style="display: flex; gap: 8px;">
           <input type="text" id="ssh-key-path" class="form-input" placeholder="Select private key file..." readonly style="flex: 1;">
-          <button type="button" class="btn btn-secondary" onclick="browseSSHKey()" style="white-space: nowrap;">
+          <button type="button" class="btn btn-secondary" data-action="browse-ssh-key" style="white-space: nowrap;">
             <i data-lucide="folder-open" class="w-4 h-4"></i>
           </button>
         </div>
@@ -220,8 +219,8 @@
       <input type="hidden" id="ssh-node-id">
     </div>
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('ssh-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="connectSSH()">Connect</button>
+      <button class="btn btn-secondary" data-close-modal="ssh-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="connect-ssh">Connect</button>
     </div>
   </div>
 </div>
@@ -231,7 +230,7 @@
   <div class="modal" style="width: 760px; max-width: 95vw;">
     <div class="modal-header">
       <h3><i data-lucide="radar" class="w-5 h-5 inline mr-2"></i>Network Discovery</h3>
-      <button onclick="closeModal('discovery-modal')" class="text-slate-400 hover:text-white">
+      <button data-close-modal="discovery-modal" class="text-slate-400 hover:text-white">
         <i data-lucide="x" class="w-5 h-5"></i>
       </button>
     </div>
@@ -262,9 +261,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('discovery-modal')">Close</button>
-      <button class="btn btn-primary" id="btn-start-scan" onclick="startNetworkScan()">Start Scan</button>
-      <button class="btn btn-primary hidden" id="btn-add-discovered" onclick="addDiscoveredNodes()">Add Selected to Canvas</button>
+      <button class="btn btn-secondary" data-close-modal="discovery-modal">Close</button>
+      <button class="btn btn-primary" id="btn-start-scan" data-action="start-scan">Start Scan</button>
+      <button class="btn btn-primary hidden" id="btn-add-discovered" data-action="add-discovered">Add Selected to Canvas</button>
     </div>
   </div>
 </div>
@@ -274,7 +273,7 @@
   <div class="modal">
     <div class="modal-header">
       <h3 id="node-modal-title"><i data-lucide="edit" class="w-5 h-5 inline mr-2"></i>Edit Node</h3>
-      <button onclick="closeModal('node-modal')" class="text-slate-400 hover:text-white">
+      <button data-close-modal="node-modal" class="text-slate-400 hover:text-white">
         <i data-lucide="x" class="w-5 h-5"></i>
       </button>
     </div>
@@ -296,7 +295,7 @@
       <div class="grid grid-cols-2 gap-4">
         <div class="form-group">
           <label class="form-label">Node Type</label>
-          <select id="node-is-container" class="form-input" onchange="toggleContainerOptions()">
+          <select id="node-is-container" class="form-input">
             <option value="false">Standard Node</option>
             <option value="true">Container (can hold child nodes)</option>
           </select>
@@ -317,14 +316,14 @@
         <div class="form-group" id="container-zones-group" style="display: none;">
           <label class="form-label">VLAN Zones</label>
           <div id="container-zones-list" class="mb-2" style="max-height: 200px; overflow-y: auto;"></div>
-          <button type="button" onclick="addContainerZone()" class="btn btn-secondary btn-sm w-full">
+          <button type="button" data-action="add-container-zone" class="btn btn-secondary btn-sm w-full">
             <i data-lucide="plus" class="w-4 h-4"></i> Add VLAN Zone
           </button>
         </div>
       </div>
       <div class="form-group" id="container-parent-group" style="display: none;">
         <label class="form-label">Parent Container</label>
-        <select id="node-parent-container" class="form-input" onchange="updateZoneDropdown()">
+        <select id="node-parent-container" class="form-input">
           <option value="">No parent (standalone)</option>
         </select>
       </div>
@@ -389,7 +388,7 @@
         <div class="grid grid-cols-3 gap-2">
           <input type="number" id="node-ssh-port" class="form-input" placeholder="SSH Port" value="22">
           <input type="text" id="node-ssh-user" class="form-input" placeholder="Username" autocomplete="off">
-          <select id="node-ssh-auth" class="form-input" onchange="toggleNodeSshAuth()">
+          <select id="node-ssh-auth" class="form-input">
             <option value="password">Password</option>
             <option value="key">Private key</option>
           </select>
@@ -401,14 +400,14 @@
         <div id="node-ssh-key-row" class="mt-2 hidden">
           <div class="flex gap-2">
             <input type="text" id="node-ssh-key-path" class="form-input" placeholder="Private key path" readonly>
-            <button type="button" class="btn btn-secondary" onclick="browseNodeSshKey()">
+            <button type="button" class="btn btn-secondary" data-action="browse-node-ssh-key">
               <i data-lucide="folder-open" class="w-4 h-4"></i>
             </button>
           </div>
           <input type="password" id="node-ssh-passphrase" class="form-input mt-2" placeholder="Key passphrase" autocomplete="new-password">
           <p id="node-ssh-passphrase-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
         </div>
-        <button type="button" id="node-ssh-secret-clear" class="text-xs text-slate-400 hover:text-red-400 mt-2 hidden" onclick="clearNodeSecretField()">Clear saved secret</button>
+        <button type="button" id="node-ssh-secret-clear" class="text-xs text-slate-400 hover:text-red-400 mt-2 hidden" data-action="clear-node-secret">Clear saved secret</button>
       </div>
       <div class="form-group">
         <label class="form-label">SNMP v2c (read-only, optional)</label>
@@ -418,12 +417,12 @@
           <input type="password" id="snmp-community" class="form-input" placeholder="Community" autocomplete="new-password">
         </div>
         <p id="snmp-community-hint" class="text-xs text-emerald-400 mt-1 hidden"></p>
-        <button type="button" id="snmp-community-clear" class="text-xs text-slate-400 hover:text-red-400 mt-2 hidden" onclick="SnmpUI.clearFormCommunity()">Clear saved community</button>
+        <button type="button" id="snmp-community-clear" class="text-xs text-slate-400 hover:text-red-400 mt-2 hidden" data-action="clear-snmp-community">Clear saved community</button>
       </div>
       <div class="form-group">
         <label class="form-label">Ports / Interfaces</label>
         <div id="node-ports-list" class="space-y-2 max-h-40 overflow-y-auto mb-2"></div>
-        <button type="button" onclick="addNodePort()" class="w-full py-2 border border-dashed border-slate-500 text-slate-400 rounded text-sm hover:border-blue-500 hover:text-blue-400 transition">
+        <button type="button" data-action="add-node-port" class="w-full py-2 border border-dashed border-slate-500 text-slate-400 rounded text-sm hover:border-blue-500 hover:text-blue-400 transition">
           + Add Port
         </button>
       </div>
@@ -443,57 +442,57 @@
       <input type="hidden" id="node-edit-id">
     </div>
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('node-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveNode()">Save</button>
+      <button class="btn btn-secondary" data-close-modal="node-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="save-node">Save</button>
     </div>
   </div>
 </div>
 
 <!-- Context Menu -->
 <div id="context-menu" class="context-menu hidden">
-  <div class="context-menu-item" onclick="openSSHFromContext()">
+  <div class="context-menu-item" data-context-action="ssh">
     <i data-lucide="terminal" class="w-4 h-4"></i>
     <span>SSH Connect</span>
   </div>
-  <div class="context-menu-item" onclick="editNodeFromContext()">
+  <div class="context-menu-item" data-context-action="edit">
     <i data-lucide="edit" class="w-4 h-4"></i>
     <span>Edit Node</span>
   </div>
   <div class="context-menu-divider"></div>
-  <div class="context-menu-item" onclick="pingNodeFromContext()">
+  <div class="context-menu-item" data-context-action="ping">
     <i data-lucide="activity" class="w-4 h-4"></i>
     <span>Ping</span>
   </div>
-  <div id="context-traceroute" class="context-menu-item" onclick="tracerouteFromContext()">
+  <div id="context-traceroute" class="context-menu-item" data-context-action="traceroute">
     <i data-lucide="route" class="w-4 h-4"></i>
     <span>Traceroute</span>
   </div>
-  <div id="context-copy-address" class="context-menu-item" onclick="copyAddressFromContext()">
+  <div id="context-copy-address" class="context-menu-item" data-context-action="copy-address">
     <i data-lucide="copy" class="w-4 h-4"></i>
     <span>Copy Address</span>
   </div>
-  <div id="context-open-web" class="context-menu-item" onclick="openWebFromContext()">
+  <div id="context-open-web" class="context-menu-item" data-context-action="open-web">
     <i data-lucide="globe" class="w-4 h-4"></i>
     <span>Open Web UI</span>
   </div>
-  <div id="context-wake" class="context-menu-item hidden" onclick="wakeFromContext()">
+  <div id="context-wake" class="context-menu-item hidden" data-context-action="wake">
     <i data-lucide="power" class="w-4 h-4"></i>
     <span>Wake-on-LAN</span>
   </div>
-  <div class="context-menu-item" onclick="showStatusHistoryFromContext()">
+  <div class="context-menu-item" data-context-action="status-history">
     <i data-lucide="clock" class="w-4 h-4"></i>
     <span>Status History</span>
   </div>
   <div id="context-container-section" class="hidden">
     <div class="context-menu-divider"></div>
-    <div id="context-container-toggle" class="context-menu-item" onclick="toggleContainerFromContext()">
+    <div id="context-container-toggle" class="context-menu-item" data-context-action="toggle-container">
       <i data-lucide="chevrons-down-up" class="w-4 h-4"></i>
       <span>Collapse Container</span>
     </div>
   </div>
   <div id="context-child-section" class="hidden">
     <div class="context-menu-divider"></div>
-    <div class="context-menu-item" onclick="removeFromContainerFromContext()">
+    <div class="context-menu-item" data-context-action="remove-from-container">
       <i data-lucide="log-out" class="w-4 h-4"></i>
       <span>Remove from Container</span>
     </div>
@@ -503,7 +502,7 @@
     <div id="context-add-to-container-items"></div>
   </div>
   <div class="context-menu-divider"></div>
-  <div class="context-menu-item danger" onclick="deleteNodeFromContext()">
+  <div class="context-menu-item danger" data-context-action="delete">
     <i data-lucide="trash-2" class="w-4 h-4"></i>
     <span>Delete Node</span>
   </div>
@@ -514,7 +513,7 @@
   <div class="modal" style="width: 720px;">
     <div class="modal-header">
       <h3><i data-lucide="route" class="w-5 h-5 inline mr-2"></i><span id="traceroute-title">Traceroute</span></h3>
-      <button onclick="closeModal('traceroute-modal')" class="text-slate-400 hover:text-white">
+      <button data-close-modal="traceroute-modal" class="text-slate-400 hover:text-white">
         <i data-lucide="x" class="w-5 h-5"></i>
       </button>
     </div>
