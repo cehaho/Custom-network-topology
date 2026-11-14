@@ -1,6 +1,7 @@
 mod config;
 mod hosts;
 mod known_hosts;
+mod latency;
 mod monitor;
 mod probe;
 mod network;

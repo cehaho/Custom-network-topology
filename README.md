@@ -39,6 +39,7 @@ npm start
 - **Admin** édite le **même document** de topologie que le canevas, dans la même fenêtre. Une sauvegarde conserve les liens, ports, conteneurs et zones VLAN.
 - **Découvrir** envoie un ping sur une plage IPv4 (1–254) et lit la table ARP locale. Les voisins IPv6 sont ensuite lus dans la table des voisins du système (voir [IPv6](#ipv6)) et proposés, décochés, dans la liste.
 - **Supervision** : chaque nœud est sondé (ping ICMP, ou connexion TCP si un port est défini). L’intervalle par défaut est de 5 s (`settings.probeIntervalMs`). L’état reste `unknown` jusqu’à deux résultats concordants (`settings.confirmations`) ; un seul échec ne bascule pas le nœud. Au plus une vingtaine de sondes tournent en parallèle. L’historique court est écrit à part dans `status.json`.
+- **Latence et disponibilité** : chaque sonde mesure un temps aller-retour. Pour le ping, il est lu sur la ligne de réponse (`time=12.3 ms` sous Linux et macOS, `time=12ms`, `time<1ms`, `temps=12 ms` ou `temps<1ms` sous Windows en anglais ou en français ; `<1ms` compte pour 0,5 ms) ; pour TCP, c’est la durée de la connexion. L’événement `monitor-status` garde ses champs (`status`, `responseTime`, `history`) et ajoute `reachable` (résultat brut de cette sonde, avant confirmation) et `rtt` (ms, `null` en cas d’échec). La fenêtre garde les 120 derniers résultats par nœud (`renderer/js/history.js`, amorcés depuis `status.json`). Au survol d’un nœud ou de sa ligne dans la liste des hôtes, une infobulle affiche la latence actuelle, min / moy / max, le taux de disponibilité et une courbe (interrompue à chaque échec, marqué en rouge).
 - **Lien actif / secours** : si un nœud a un lien `primary` et un lien `failover`, le lien actif est le primaire tant que le voisin primaire répond ; sinon le secours si son voisin répond ; sinon le primaire (en panne). Seul le lien actif est animé. Le secours reste visible, en attente, tant que le primaire répond.
 - Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
 - **Clés d’hôte SSH (TOFU)** : à la première connexion à un `hôte:port`, la connexion est refusée tant que l’utilisateur n’a pas confirmé l’empreinte SHA256 de la clé présentée par le serveur. Après confirmation, la clé est mémorisée. Si un hôte connu présente une autre clé, la connexion est refusée (attaque de l’homme du milieu possible, ou serveur réinstallé) ; la boîte de dialogue d’erreur propose d’oublier la clé enregistrée, et la connexion suivante redemande une confirmation.
@@ -83,6 +84,8 @@ Custom-network-topology/
 │       ├── topology.js     # Document de topologie partagé
 │       ├── hosts.js        # Contrôles hôte (IPv4, IPv6, nom) / port / plage, miroir de hosts.rs
 │       ├── probe.js        # Confirmation d’état et lien actif
+│       ├── history.js      # Historique de latence par nœud (tampon, stats, courbe)
+│       ├── latency-ui.js   # Infobulle de latence au survol
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
 │       ├── admin.js        # Tableau Admin
 │       └── app.js          # Canevas, SSH, découverte, UI de supervision
