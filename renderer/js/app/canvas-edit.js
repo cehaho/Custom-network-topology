@@ -1,7 +1,7 @@
 // Editing on the canvas with the mouse: dragging nodes (also into containers
 // and VLAN zones), drawing links between ports, deleting the selected link.
 
-import { TopologyCanvas } from './libs.js';
+import { AppDialog, TopologyCanvas } from './libs.js';
 import { state } from './state.js';
 import { toastSuccess } from './ui.js';
 import { saveConfig } from './io.js';
@@ -132,7 +132,7 @@ function endConnection(e) {
   connectionStart = null;
 }
 
-export function deleteSelectedConnection() {
+export async function deleteSelectedConnection() {
   if (!state.selectedConnectionId) return;
 
   const conn = state.config.links.find(c => c.id === state.selectedConnectionId);
@@ -144,11 +144,11 @@ export function deleteSelectedConnection() {
   const sourceName = sourceNode?.name || conn.sourceNodeId;
   const targetName = targetNode?.name || conn.targetNodeId;
 
-  if (confirm(`Delete connection between "${sourceName}" and "${targetName}"?`)) {
+  if (await AppDialog.confirm(`Delete connection between "${sourceName}" and "${targetName}"?`, { danger: true })) {
     // Save state for undo
     saveStateForUndo(`Delete connection "${sourceName}" - "${targetName}"`);
 
-    const idx = state.config.links.findIndex(c => c.id === state.selectedConnectionId);
+    const idx = state.config.links.findIndex(c => c.id === conn.id);
     if (idx !== -1) {
       state.config.links.splice(idx, 1);
       state.selectedConnectionId = null;

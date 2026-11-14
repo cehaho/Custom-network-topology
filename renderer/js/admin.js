@@ -64,11 +64,11 @@
         if (response.ok) raw = await response.json();
       }
       if (raw && raw.success === false) {
-        alert(raw.error || 'The topology file was not changed');
+        await globalThis.AppDialog.alert(raw.error || 'The topology file was not changed');
       } else if (raw) {
         const loaded = Topology.read(raw);
         if (!loaded.ok) {
-          alert(loaded.error);
+          await globalThis.AppDialog.alert(loaded.error);
         } else {
           standaloneDocument = loaded.document;
           if (loaded.changed && window.desktopAPI) {
@@ -483,11 +483,11 @@
     render();
   }
 
-  function removeRow(index) {
+  async function removeRow(index) {
     const doc = current();
     const host = doc.nodes[index];
     if (!host) return;
-    if (!window.confirm('Delete "' + (host.name || host.id) + '"?')) return;
+    if (!(await globalThis.AppDialog.confirm('Delete "' + (host.name || host.id) + '"?', { danger: true }))) return;
     Topology.removeNode(doc, host.id);
     markDirty();
     render();
@@ -566,15 +566,15 @@
       const result = await window.desktopAPI.config.import();
       if (!result || result.canceled) return null;
       if (!result.success || !result.config) {
-        alert((result && result.error) || 'Import failed');
+        await globalThis.AppDialog.alert((result && result.error) || 'Import failed');
         return null;
       }
       const loaded = Topology.read(result.config);
       if (!loaded.ok) {
-        alert(loaded.error);
+        await globalThis.AppDialog.alert(loaded.error);
         return null;
       }
-      if (!window.confirm(Topology.importMessage(loaded.document))) {
+      if (!(await globalThis.AppDialog.confirm(Topology.importMessage(loaded.document)))) {
         importToken = null;
         if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
         return null;
@@ -593,28 +593,28 @@
           return;
         }
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
           try {
             const loaded = Topology.read(JSON.parse(String(reader.result)));
             if (!loaded.ok) {
-              alert(loaded.error);
+              await globalThis.AppDialog.alert(loaded.error);
               resolve(null);
               return;
             }
             if (Topology.hasSecretValues(loaded.document)) {
-              alert('Passwords in this file were not imported. The system keyring is unavailable, so they were not saved.');
+              await globalThis.AppDialog.alert('Passwords in this file were not imported. The system keyring is unavailable, so they were not saved.');
               loaded.document = Topology.withoutSecretValues(loaded.document);
               (loaded.document.nodes || []).forEach((node) => {
                 delete node.sshSecret;
               });
             }
-            if (!window.confirm(Topology.importMessage(loaded.document))) {
+            if (!(await globalThis.AppDialog.confirm(Topology.importMessage(loaded.document)))) {
               resolve(null);
               return;
             }
             resolve(loaded.document);
           } catch (error) {
-            alert('Invalid config file.');
+            await globalThis.AppDialog.alert('Invalid config file.');
             resolve(null);
           }
         };

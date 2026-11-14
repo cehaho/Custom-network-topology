@@ -1,6 +1,6 @@
 // SSH: connection modal, host key prompts, xterm.js terminal tabs.
 
-import { FitAddon, Terminal, Topology, lucide } from './libs.js';
+import { AppDialog, FitAddon, Terminal, Topology, lucide } from './libs.js';
 import { escapeHtml } from './util.js';
 import { state } from './state.js';
 import {
@@ -154,7 +154,7 @@ async function connectSSH() {
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
   let result = await window.desktopAPI.ssh.connect(connectionInfo);
-  if (!result.success && result.hostKey && result.hostKey.status === 'unknown' && confirmUnknownHostKey(result.hostKey)) {
+  if (!result.success && result.hostKey && result.hostKey.status === 'unknown' && await confirmUnknownHostKey(result.hostKey)) {
     connectionInfo.acceptHostKey = result.hostKey.fingerprint;
     result = await window.desktopAPI.ssh.connect(connectionInfo);
   }
@@ -176,25 +176,28 @@ async function connectSSH() {
 
 // The fingerprint is shown in full so the user can compare it with the server
 // (for example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+// Resolves true when the user trusts the key; Cancel is focused first.
 function confirmUnknownHostKey(hostKey) {
-  return window.confirm(
+  return AppDialog.confirm(
     `First connection to ${hostKey.host}:${hostKey.port}.\n\n` +
     `The server presented this host key:\n` +
     `${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
     `Only continue if this fingerprint matches the server's.\n` +
-    `OK: trust and remember this key, then connect.\nCancel: do not connect.`
+    `OK: trust and remember this key, then connect.\nCancel: do not connect.`,
+    { danger: true, monospace: true }
   );
 }
 
 async function offerToForgetHostKey(hostKey) {
-  const forget = window.confirm(
+  const forget = await AppDialog.confirm(
     `HOST KEY MISMATCH for ${hostKey.host}:${hostKey.port}.\n\n` +
     `Stored key:\n${hostKey.storedAlgorithm}\n${hostKey.storedFingerprint}\n\n` +
     `Presented key:\n${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
     `Someone may be intercepting the connection. Only forget the stored key ` +
     `if you know the server's key changed (reinstall, new key).\n\n` +
     `OK: forget the stored key (you will be asked to verify the new one on the next connection).\n` +
-    `Cancel: keep the stored key.`
+    `Cancel: keep the stored key.`,
+    { danger: true, monospace: true }
   );
   if (!forget) return;
   const removed = await window.desktopAPI.ssh.forgetHostKey(hostKey.host, hostKey.port);

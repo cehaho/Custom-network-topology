@@ -315,26 +315,30 @@
     if (typeof onEdit === 'function') {
       group.addEventListener('dblclick', (event) => {
         event.stopPropagation();
-        if (editLinkInterface(conn, doc)) onEdit();
+        editLinkInterface(conn, doc).then((changed) => {
+          if (changed) onEdit();
+        });
       });
     }
   }
 
-  function editLinkInterface(conn, doc) {
-    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return false;
+  // Resolves true when the link changed.
+  async function editLinkInterface(conn, doc) {
+    const dialog = globalThis.AppDialog;
+    if (!dialog) return false;
     const nodes = (doc && doc.nodes) || [];
     const owners = [conn.sourceNodeId, conn.targetNodeId]
       .map((id) => nodes.find((node) => node.id === id))
       .filter((node) => node && isObject(node.snmp) && node.snmp.enabled);
     if (owners.length === 0) {
-      window.alert('Enable SNMP on one end of this link first.');
+      await dialog.alert('Enable SNMP on one end of this link first.');
       return false;
     }
     const owner = owners.find((node) => node.id === conn.snmpNodeId) || owners[0];
     const current = Number.isInteger(conn.snmpIfIndex) ? String(conn.snmpIfIndex) : (conn.snmpIfName || '');
-    const answer = window.prompt(
+    const answer = await dialog.prompt(
       'SNMP interface on "' + (owner.name || owner.id) + '" for this link (ifIndex or name). Leave empty to match by port name.',
-      current
+      { defaultValue: current }
     );
     if (answer === null) return false;
     const value = answer.trim();

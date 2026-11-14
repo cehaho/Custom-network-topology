@@ -16,6 +16,7 @@ export const SnmpUI = g.SnmpUI;
 export const QuickActions = g.QuickActions;
 export const Admin = g.Admin;
 export const LatencyHistory = g.LatencyHistory;
+export const AppDialog = g.AppDialog;
 export const lucide = g.lucide;
 export const Terminal = g.Terminal;
 export const FitAddon = g.FitAddon;

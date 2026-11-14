@@ -2,7 +2,7 @@
 // interactive import, export. Loading at start-up is in main.js because it
 // redraws the canvas.
 
-import { Topology } from './libs.js';
+import { AppDialog, Topology } from './libs.js';
 import { state } from './state.js';
 import { toastError } from './ui.js';
 
@@ -58,7 +58,7 @@ export async function importTopologyInteractive() {
     toastError('Import refused', loaded.error);
     return null;
   }
-  if (!window.confirm(Topology.importMessage(loaded.document))) {
+  if (!(await AppDialog.confirm(Topology.importMessage(loaded.document)))) {
     pendingImportToken = null;
     if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
     return null;

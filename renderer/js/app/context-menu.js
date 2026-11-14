@@ -1,6 +1,6 @@
 // The node context menu (right click) and its entries.
 
-import { QuickActions, lucide } from './libs.js';
+import { AppDialog, QuickActions, lucide } from './libs.js';
 import { escapeHtml, formatDuration } from './util.js';
 import { state } from './state.js';
 import { toastError, toastInfo, toastSuccess } from './ui.js';
@@ -157,16 +157,16 @@ function showStatusHistoryFromContext() {
     message += `• ${historyWhen(entry)}: ${historyLabel(entry.status)}${delay}\n`;
   });
 
-  // Show as alert for now (could be improved with a modal)
-  alert(`Status History for "${nodeName}"\n\n${message}`);
+  // Show as an in-page alert (could be improved with a dedicated modal)
+  AppDialog.alert(`Status History for "${nodeName}"\n\n${message}`);
 }
 
-function deleteNodeFromContext() {
+async function deleteNodeFromContext() {
   const node = contextMenuNode;
   if (!node) return;
   hideContextMenu();
 
-  if (confirm(`Delete node "${node.name}"?`)) {
+  if (await AppDialog.confirm(`Delete node "${node.name}"?`, { danger: true })) {
     // Save state for undo
     saveStateForUndo(`Delete node "${node.name}"`);
 

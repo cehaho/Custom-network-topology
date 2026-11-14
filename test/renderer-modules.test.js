@@ -18,7 +18,7 @@ const modules = fs.readdirSync(appDir).filter((file) => file.endsWith('.js')).so
 const source = (file) => fs.readFileSync(path.join(appDir, file), 'utf8');
 
 const LIBRARIES = [
-  'probe-checks.js', 'topology.js', 'hosts.js', 'probe.js', 'alerts.js', 'canvas.js', 'search.js',
+  'dialog.js', 'probe-checks.js', 'topology.js', 'hosts.js', 'probe.js', 'alerts.js', 'canvas.js', 'search.js',
   'export.js', 'discovery.js', 'history.js', 'desktop.js', 'known-hosts-admin.js', 'snmp.js',
   'admin.js', 'actions.js'
 ];
