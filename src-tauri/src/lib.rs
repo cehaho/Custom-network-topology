@@ -3,6 +3,7 @@ mod hosts;
 mod known_hosts;
 mod monitor;
 mod probe;
+mod probe_kinds;
 mod network;
 mod secrets;
 mod ssh;

@@ -28,6 +28,7 @@ struct Measured {
     id: String,
     online: Option<bool>,
     response_time: Option<u64>,
+    detail: Option<String>,
 }
 
 pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
@@ -73,6 +74,13 @@ pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
                     sample.response_time,
                     entries,
                 ));
+                // Which check failed (or passed), for a node with a `probe`.
+                if let (Some(detail), Some(item)) = (
+                    &sample.detail,
+                    public.last_mut().and_then(Value::as_object_mut),
+                ) {
+                    item.insert("detail".to_string(), json!(detail));
+                }
             }
             let before = history.len();
             history.retain(|id, _| seen.contains(id));
@@ -144,8 +152,30 @@ async fn measure_one(node: Value) -> Measured {
             id,
             online: None,
             response_time: None,
+            detail: None,
         };
     };
+    // A `probe` object replaces the default ping / TCP probe.
+    match crate::probe_kinds::plan(object) {
+        crate::probe_kinds::RichPlan::Default => {}
+        crate::probe_kinds::RichPlan::Skip => {
+            return Measured {
+                id,
+                online: None,
+                response_time: None,
+                detail: None,
+            };
+        }
+        crate::probe_kinds::RichPlan::Run(host, checks) => {
+            let outcome = crate::probe_kinds::run(&host, &checks).await;
+            return Measured {
+                id,
+                online: Some(outcome.online),
+                response_time: Some(outcome.elapsed_ms),
+                detail: Some(outcome.detail),
+            };
+        }
+    }
     // `plan_probe` drops an unsafe address. Nothing below builds a command
     // string from it: ping receives argv, TCP receives a socket address.
     let Some(plan) = plan_probe(object) else {
@@ -153,6 +183,7 @@ async fn measure_one(node: Value) -> Measured {
             id,
             online: None,
             response_time: None,
+            detail: None,
         };
     };
     match plan {
@@ -162,6 +193,7 @@ async fn measure_one(node: Value) -> Measured {
                 id,
                 online: Some(result.online),
                 response_time: Some(result.duration_ms),
+                detail: None,
             }
         }
         ProbePlan::Tcp { host, port } => {
@@ -171,6 +203,7 @@ async fn measure_one(node: Value) -> Measured {
                 id,
                 online: Some(online),
                 response_time: Some(started.elapsed().as_millis() as u64),
+                detail: None,
             }
         }
     }

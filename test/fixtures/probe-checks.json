@@ -1,0 +1,66 @@
+[
+  { "probe": null, "result": null },
+  { "probe": {}, "result": null },
+  { "probe": { "ping": false, "tcp": { "ports": [] }, "http": false, "dns": null }, "result": null },
+  { "probe": { "ping": true }, "result": { "ping": true } },
+  {
+    "probe": { "tcp": { "ports": [22, "443", 22], "mode": "any" }, "future": 1 },
+    "result": { "tcp": { "ports": [22, 443], "mode": "any" } }
+  },
+  {
+    "probe": { "http": {} },
+    "result": { "http": { "scheme": "http", "path": "/", "expectStatus": "200-399", "timeoutMs": 3000, "insecureTls": false } }
+  },
+  {
+    "probe": { "http": { "scheme": "http", "insecureTls": true, "expectStatus": 204 } },
+    "result": { "http": { "scheme": "http", "path": "/", "expectStatus": "204", "timeoutMs": 3000, "insecureTls": false } }
+  },
+  {
+    "probe": { "http": { "scheme": "https", "port": "8443", "path": "/health?full=1", "expectStatus": "200-299", "timeoutMs": 5000, "insecureTls": true } },
+    "result": { "http": { "scheme": "https", "port": 8443, "path": "/health?full=1", "expectStatus": "200-299", "timeoutMs": 5000, "insecureTls": true } }
+  },
+  {
+    "probe": { "dns": { "name": " Example.COM. ", "type": "aaaa" } },
+    "result": { "dns": { "name": "example.com", "type": "AAAA", "port": 53, "timeoutMs": 2000 } }
+  },
+  {
+    "probe": { "dns": { "name": "dc_1.corp.lan", "port": 5353, "timeoutMs": 1000 } },
+    "result": { "dns": { "name": "dc_1.corp.lan", "type": "A", "port": 5353, "timeoutMs": 1000 } }
+  },
+  { "probe": "ping", "error": "must be an object" },
+  { "probe": [], "error": "must be an object" },
+  { "probe": { "ping": "yes" }, "error": "ping must be true or false" },
+  { "probe": { "tcp": [22] }, "error": "tcp must be an object" },
+  { "probe": { "tcp": { "ports": 22 } }, "error": "tcp.ports must be a list of ports" },
+  { "probe": { "tcp": { "ports": [0] } }, "error": "tcp.ports holds an invalid port" },
+  { "probe": { "tcp": { "ports": [70000] } }, "error": "tcp.ports holds an invalid port" },
+  { "probe": { "tcp": { "ports": ["22a"] } }, "error": "tcp.ports holds an invalid port" },
+  { "probe": { "tcp": { "ports": [22.5] } }, "error": "tcp.ports holds an invalid port" },
+  { "probe": { "tcp": { "ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] } }, "error": "tcp.ports holds more than 16 ports" },
+  { "probe": { "tcp": { "ports": [22], "mode": "some" } }, "error": "tcp.mode must be \"all\" or \"any\"" },
+  { "probe": { "http": { "host": "evil.example" } }, "error": "http.host and http.url are not allowed: the check targets the node address" },
+  { "probe": { "http": { "url": "http://evil.example/" } }, "error": "http.host and http.url are not allowed: the check targets the node address" },
+  { "probe": { "http": { "scheme": "ftp" } }, "error": "http.scheme must be \"http\" or \"https\"" },
+  { "probe": { "http": { "port": 0 } }, "error": "http.port is not a valid port" },
+  { "probe": { "http": { "path": "health" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "//evil.example/" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "/@evil.example" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "/a b" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "/#frag" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "/\\evil" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "path": "/x\ny" } }, "error": "http.path must start with / and hold URL characters only" },
+  { "probe": { "http": { "expectStatus": "399-200" } }, "error": "http.expectStatus must look like 200 or 200-399" },
+  { "probe": { "http": { "expectStatus": "2000" } }, "error": "http.expectStatus must look like 200 or 200-399" },
+  { "probe": { "http": { "expectStatus": "600" } }, "error": "http.expectStatus must look like 200 or 200-399" },
+  { "probe": { "http": { "timeoutMs": 100 } }, "error": "http.timeoutMs must be between 500 and 30000" },
+  { "probe": { "http": { "timeoutMs": "3000" } }, "error": "http.timeoutMs must be between 500 and 30000" },
+  { "probe": { "http": { "scheme": "https", "insecureTls": "yes" } }, "error": "http.insecureTls must be true or false" },
+  { "probe": { "dns": {} }, "error": "dns.name must be a host name" },
+  { "probe": { "dns": { "name": "" } }, "error": "dns.name must be a host name" },
+  { "probe": { "dns": { "name": "1.2.3.4" } }, "error": "dns.name must be a host name" },
+  { "probe": { "dns": { "name": "a;b.lan" } }, "error": "dns.name must be a host name" },
+  { "probe": { "dns": { "name": "-bad.lan" } }, "error": "dns.name must be a host name" },
+  { "probe": { "dns": { "name": "x.lan", "type": "MX" } }, "error": "dns.type must be \"A\" or \"AAAA\"" },
+  { "probe": { "dns": { "name": "x.lan", "port": 99999 } }, "error": "dns.port is not a valid port" },
+  { "probe": { "dns": { "name": "x.lan", "timeoutMs": 60000 } }, "error": "dns.timeoutMs must be between 500 and 10000" }
+]
