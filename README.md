@@ -10,7 +10,7 @@ Le schéma d’exemple comporte quatre hôtes : une passerelle, Internet (`8.8.8
 - npm
 - Rust stable (1.90 ou plus) et Cargo
 - Sous Linux : WebKitGTK 4.1 et les bibliothèques de développement GTK 3
-- Une connexion réseau au premier lancement. L’interface charge Tailwind CSS et Lucide depuis leurs CDN. Le terminal SSH est copié depuis `node_modules` à l’installation et n’utilise pas de CDN.
+- Une connexion réseau uniquement pour `npm install`. L’interface ne charge rien depuis Internet : xterm (`@xterm/xterm`, `@xterm/addon-fit`) et Lucide sont copiés depuis `node_modules`, et la feuille Tailwind est compilée localement.
 
 Sous Debian / Ubuntu, les paquets WebKitGTK / GTK ressemblent souvent à :
 
@@ -60,6 +60,8 @@ Les mots de passe SSH et les passphrases de clé **ne sont pas** écrits dans ce
 ```
 Custom-network-topology/
 ├── src-tauri/              # Commandes Tauri : config, SSH, ping, scan, sondes, secrets
+├── tailwind.config.js      # Fichiers scannés par Tailwind (renderer/**/*.html, renderer/js/**/*.js)
+├── tailwind.css            # Entrée Tailwind (base, components, utilities)
 ├── lib/hosts.js            # Contrôles hôte / port / plage (mirroir Rust)
 ├── renderer/
 │   ├── index.html          # Fenêtre topologie
@@ -72,12 +74,12 @@ Custom-network-topology/
 │       ├── admin.js        # Tableau Admin
 │       └── app.js          # Canevas, SSH, découverte, UI de supervision
 ├── scripts/
-│   ├── copy-vendor.js      # Copie xterm dans renderer/vendor
+│   ├── copy-vendor.js      # Copie xterm et Lucide, compile Tailwind dans renderer/vendor
 │   └── dev-server.js       # Sert renderer/ sur 127.0.0.1:1420
 └── test/                   # hosts, topology, probe, secrets, config
 ```
 
-`renderer/vendor/` est généré par `npm install`. Il n’est pas versionné. Le nom `window.electronAPI` est conservé côté rendu pour limiter le diff ; l’implémentation est Tauri.
+`renderer/vendor/` est généré par `npm install` (script `postinstall`), puis régénéré avant `tauri dev` et `tauri build` (`beforeDevCommand` / `beforeBuildCommand`). Il n’est pas versionné. Tailwind ne génère que les classes présentes en toutes lettres dans `renderer/` : une classe construite par concaténation dans le JS doit être ajoutée au `safelist` de `tailwind.config.js`. Après une modification de classes hors `npm start`, relancer `node scripts/copy-vendor.js`. Le nom `window.electronAPI` est conservé côté rendu pour limiter le diff ; l’implémentation est Tauri.
 
 ## Configuration
 
@@ -149,8 +151,6 @@ Couvre la validation des hôtes, le document de topologie, la confirmation de so
 ## Limites
 
 - Découverte et supervision en IPv4 uniquement.
-- Tailwind et Lucide sont chargés depuis Internet. Sans réseau, la page n’a ni styles utilitaires ni icônes.
-- `xterm` 5 et `xterm-addon-fit` 0.8 sont les paquets contre lesquels cette UI a été écrite. Les deux noms sont dépréciés en amont au profit de `@xterm/xterm` et `@xterm/addon-fit`.
 - Le SSH accepte la clé d’hôte du serveur sans la mémoriser. Pas de contrôle known-hosts dans cette version.
 - Pas de test automatisé du canevas. `npm test` ne couvre pas l’UI graphique.
 

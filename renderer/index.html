@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://cdn.tailwindcss.com https://unpkg.com;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
   <title>Network Topology</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="vendor/tailwind.css">
+  <script src="vendor/lucide.min.js"></script>
   <link rel="stylesheet" href="vendor/xterm.css">
 
   <style>
@@ -1186,7 +1186,7 @@
 <div id="admin-root"></div>
 
 <script src="vendor/xterm/xterm.js"></script>
-<script src="vendor/xterm-addon-fit/xterm-addon-fit.js"></script>
+<script src="vendor/addon-fit/addon-fit.js"></script>
 <script src="js/topology.js"></script>
 <script src="js/probe.js"></script>
 <script src="js/desktop.js"></script>
