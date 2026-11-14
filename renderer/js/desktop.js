@@ -55,6 +55,11 @@
       stop: () => invoke('monitor_stop'),
       onStatus: (callback) => subscribe('monitor-status', callback)
     },
+    snmp: {
+      start: (config) => invoke('snmp_start', { config }),
+      stop: () => invoke('snmp_stop'),
+      onData: (callback) => subscribe('snmp-data', callback)
+    },
     platform,
     isDesktop: true
   };

@@ -5,6 +5,7 @@ mod monitor;
 mod probe;
 mod network;
 mod secrets;
+mod snmp;
 mod ssh;
 mod topology;
 
@@ -239,6 +240,8 @@ pub fn run() {
             network_neighbors,
             monitor_start,
             monitor_stop,
+            snmp::snmp_start,
+            snmp::snmp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

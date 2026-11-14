@@ -18,6 +18,8 @@ fn main() {
         "network_neighbors",
         "monitor_start",
         "monitor_stop",
+        "snmp_start",
+        "snmp_stop",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

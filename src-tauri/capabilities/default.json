@@ -24,6 +24,8 @@
     "allow-network-arp",
     "allow-network-neighbors",
     "allow-monitor-start",
-    "allow-monitor-stop"
+    "allow-monitor-stop",
+    "allow-snmp-start",
+    "allow-snmp-stop"
   ]
 }
