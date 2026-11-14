@@ -650,7 +650,7 @@
 
   let lastOptions = null;
 
-  // Entry point used by app.js. deps: everything collectScene needs, plus
+  // Entry point used by app/canvas-view.js. deps: everything collectScene needs, plus
   // toast { info, success, error } and save(format, base64, fileName).
   async function exportImage(deps) {
     if (!deps.nodes || deps.nodes.length === 0) {

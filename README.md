@@ -54,7 +54,7 @@ npm start
 - **Alertes de changement d’état** : quand la supervision confirme qu’un nœud passe de `up` à `down` (ou l’inverse), une notification système est affichée (« <nœud> is down » / « is back up », avec l’adresse). Le premier état confirmé et les passages par `unknown` ne sont jamais signalés. Une bascule annulée en moins de 3 s est ignorée ; au plus une notification par nœud pendant le délai de `settings.alertCooldownMs` (60 s par défaut, 5 s à 1 h) — l’état final est signalé à la fin du délai s’il diffère du dernier annoncé. Si plus de 5 nœuds changent dans la même rafale, une seule notification de synthèse est affichée. Désactivable via `settings.alertsEnabled` ; les deux réglages sont dans l’en-tête de l’**Admin** (« Alerts », « Cooldown »). Un document sans ces champs reçoit les valeurs par défaut. La logique est dans `renderer/js/alerts.js` ; l’affichage passe par `tauri-plugin-notification` (commande `alerts_notify`).
 - **Lien actif / secours** : si un nœud a un lien `primary` et un lien `failover`, le lien actif est le primaire tant que le voisin primaire répond ; sinon le secours si son voisin répond ; sinon le primaire (en panne). Seul le lien actif est animé. Le secours reste visible, en attente, tant que le primaire répond.
 - Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
-- **Clés d’hôte SSH (TOFU)** : à la première connexion à un `hôte:port`, la connexion est refusée tant que l’utilisateur n’a pas confirmé l’empreinte SHA256 de la clé présentée par le serveur. Après confirmation, la clé est mémorisée. Si un hôte connu présente une autre clé, la connexion est refusée (attaque de l’homme du milieu possible, ou serveur réinstallé) ; la boîte de dialogue d’erreur propose d’oublier la clé enregistrée, et la connexion suivante redemande une confirmation.
+- **Clés d’hôte SSH (TOFU)** : à la première connexion à un `hôte:port`, la connexion est refusée tant que l’utilisateur n’a pas confirmé l’empreinte SHA256 de la clé présentée par le serveur (boîte de dialogue dans la page, *Cancel* sélectionné par défaut). Après confirmation, la clé est mémorisée. Si un hôte connu présente une autre clé, la connexion est refusée (attaque de l’homme du milieu possible, ou serveur réinstallé) ; la boîte de dialogue d’erreur propose d’oublier la clé enregistrée, et la connexion suivante redemande une confirmation.
 - Import et export de la topologie en JSON. Un export **ne contient aucun** mot de passe ni passphrase de clé. Il indique seulement, sur chaque nœud, si un secret existe et s’il s’agit d’un mot de passe ou d’une passphrase (`sshSecret.type`).
 - **Export image** (bouton *Image*) : PNG (échelle 1x ou 2x) ou SVG autonome, sur fond sombre ou clair. Le SVG contient nœuds, libellés, liens, conteneurs et zones VLAN, avec styles embarqués, sans script ni ressource externe ; les icônes Lucide et SVG sont recopiées après filtrage, une icône URL est remplacée par l’initiale du nœud. Le PNG est rastérisé depuis ce SVG. L’écriture passe par la commande `image_export` et la boîte « Enregistrer sous » du système : le contenu est vérifié (signature PNG, SVG sans contenu actif) et l’extension `.png` / `.svg` est imposée. La construction du SVG est dans `renderer/js/export.js`.
 
@@ -106,30 +106,57 @@ Lecture seule, SNMP v2c, activée nœud par nœud (formulaire du nœud ou tablea
 ```
 Custom-network-topology/
 ├── src-tauri/              # Commandes Tauri : config, SSH, ping, scan, sondes, secrets
-├── tailwind.config.js      # Fichiers scannés par Tailwind (renderer/**/*.html, renderer/js/**/*.js)
+├── tailwind.config.js      # Fichiers scannés par Tailwind (renderer/**/*.html, renderer/js/**/*.js, renderer/css/**/*.css)
 ├── tailwind.css            # Entrée Tailwind (base, components, utilities)
 ├── lib/hosts.js            # Réexporte renderer/js/hosts.js pour les tests Node
 ├── renderer/
-│   ├── index.html          # Fenêtre topologie
-│   ├── admin.html          # Éditeur de nœuds (même document)
+│   ├── index.html          # Fenêtre topologie (aucun script ni gestionnaire en ligne)
+│   ├── admin.html          # Éditeur de nœuds (même document), utilisable seul
 │   ├── config.json         # Exemple copié au premier lancement
+│   ├── css/app.css         # Styles propres à la fenêtre topologie
+│   ├── css/dialog.css      # Styles des boîtes de dialogue (les deux pages)
 │   └── js/
-│       ├── desktop.js      # window.desktopAPI branché sur Tauri
+│       ├── dialog.js       # Boîtes alerte / confirmation / saisie dans la page (WebKitGTK n’affiche pas alert, confirm, prompt)
+│       ├── probe-checks.js # Vérifications de sonde par nœud, miroir de probe_kinds.rs
 │       ├── topology.js     # Document de topologie partagé
 │       ├── hosts.js        # Contrôles hôte (IPv4, IPv6, nom) / port / plage, miroir de hosts.rs
 │       ├── probe.js        # Confirmation d’état et lien actif
-│       ├── history.js      # Historique de latence par nœud (tampon, stats, courbe)
-│       ├── latency-ui.js   # Infobulle de latence au survol
+│       ├── alerts.js       # Alertes de changement d’état (anti-rebond, délai, synthèse)
 │       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
+│       ├── search.js       # Analyse des requêtes de recherche et correspondance des nœuds
 │       ├── export.js       # Export image : SVG autonome, PNG, boîte d’options
+│       ├── discovery.js    # Découverte : noms et icônes suggérés, dédoublonnage, placement
+│       ├── history.js      # Historique de latence par nœud (tampon, stats, courbe)
+│       ├── desktop.js      # window.desktopAPI branché sur Tauri
+│       ├── known-hosts-admin.js  # Section « SSH host keys » de l’Admin
 │       ├── snmp.js         # SNMP : infobulle du nœud, charge des liens, champs du formulaire
 │       ├── admin.js        # Tableau Admin
-│       └── app.js          # Canevas, SSH, découverte, UI de supervision
+│       ├── actions.js      # Actions rapides du menu contextuel
+│       ├── admin-page.js   # Point d’entrée de admin.html
+│       └── app/            # Fenêtre topologie : modules ES, point d’entrée main.js
+│           ├── main.js     # Démarrage, chargement du document, liaison des contrôles
+│           ├── libs.js     # Réexporte aux modules les globals des scripts ci-dessus
+│           ├── state.js    # État partagé (document, sélection, zoom, supervision)
+│           ├── util.js, ui.js, io.js, theme.js
+│           │               # Utilitaires, toasts et modales, enregistrement / import / export, thème
+│           ├── viewport.js, canvas-render.js, canvas-links.js, canvas-edit.js, canvas-view.js
+│           │               # Canevas : vue, rendu des nœuds, liens, glisser / relier, grille et mise en page
+│           ├── selection.js, undo.js, minimap.js, host-list.js
+│           │               # Sélection rectangulaire, annuler / rétablir, mini-carte, liste des hôtes
+│           ├── monitoring.js, latency-ui.js, alert-notifier.js
+│           │               # Supervision, infobulle de latence, notifications
+│           ├── search-ui.js     # Recherche de la barre d’outils
+│           ├── node-form.js     # Formulaire d’ajout / modification de nœud
+│           ├── context-menu.js  # Menu clic droit
+│           ├── ssh.js           # Terminal SSH
+│           └── discovery-ui.js  # Fenêtre de découverte
 ├── scripts/
 │   ├── copy-vendor.js      # Copie xterm et Lucide, compile Tailwind dans renderer/vendor
 │   └── dev-server.js       # Sert renderer/ sur 127.0.0.1:1420
-└── test/                   # hosts, topology, probe, secrets, config
+└── test/                   # hosts, topology, probe, secrets, config, structure du renderer
 ```
+
+Les fichiers de `renderer/js/` sont des scripts classiques qui exposent chacun un global (les tests les chargent avec `require`). `index.html` les charge dans l’ordre, puis `js/app/main.js` en module ; les modules de `js/app/` s’importent entre eux et ne publient rien sur `window`. Aucune page n’ayant de script ni de gestionnaire d’événement en ligne, la CSP limite les scripts à `'self'`.
 
 `renderer/vendor/` est généré par `npm install` (script `postinstall`), puis régénéré avant `tauri dev` et `tauri build` (`beforeDevCommand` / `beforeBuildCommand`). Il n’est pas versionné. Tailwind ne génère que les classes présentes en toutes lettres dans `renderer/` : une classe construite par concaténation dans le JS doit être ajoutée au `safelist` de `tailwind.config.js`. Après une modification de classes hors `npm start`, relancer `node scripts/copy-vendor.js`.
 
@@ -201,6 +228,8 @@ npm test
 Couvre la validation des hôtes, le document de topologie, la confirmation de sonde / lien actif, et le traitement des secrets (côté JS et Rust selon les modules).
 
 `test/canvas.test.js` couvre la géométrie du canevas, isolée dans `renderer/js/canvas.js` : magnétisme de la grille, zoom autour du curseur et pan, sélection rectangulaire, position des ports, tracé des liens (courbes de Bézier, étiquettes, style selon la sonde), mise en page automatique, et dessin de la mini-carte sur un contexte 2D factice qui enregistre les appels.
+
+`test/renderer-modules.test.js` vérifie la structure du renderer : pas de gestionnaire ni de script en ligne, CSP `script-src 'self'`, ordre de chargement des scripts, `admin.html` autonome, imports des modules résolus, et chargement de tous les modules sous Node.
 
 ## Limites
 

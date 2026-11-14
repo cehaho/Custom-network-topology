@@ -1,6 +1,6 @@
 // Canvas search: query parsing and node matching.
 //
-// Pure functions only; search-ui.js owns the DOM. A query is a list of
+// Pure functions only; app/search-ui.js owns the DOM. A query is a list of
 // whitespace-separated terms, all of which must match (AND):
 //   free text       name, address, type, zone name or VLAN, status
 //   name:core       node name contains "core"

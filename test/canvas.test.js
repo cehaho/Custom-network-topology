@@ -327,12 +327,12 @@ test('a minimap click maps back to the world and recentres there', () => {
 
 // ---- Wiring ----
 
-test('the page loads canvas.js before app.js', () => {
+test('the page loads canvas.js before the app modules', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
   const canvasAt = html.indexOf('src="js/canvas.js"');
-  const appAt = html.indexOf('src="js/app.js"');
+  const appAt = html.indexOf('<script type="module" src="js/app/main.js">');
   assert.ok(canvasAt > 0, 'canvas.js is loaded');
-  assert.ok(canvasAt < appAt, 'before app.js');
+  assert.ok(appAt > 0 && canvasAt < appAt, 'before js/app/main.js');
 });
 
 test('the module also sets the browser global', () => {

@@ -1,7 +1,7 @@
 // Discovery helpers: suggested node names and icons from reverse DNS and
 // MAC vendor, deduplication against the canvas, and placement of new nodes.
 //
-// Pure functions only. app.js owns the dialog and the document; positions
+// Pure functions only. app/discovery-ui.js owns the dialog and the document; positions
 // are canvas percentages (see canvas.js: x of the width, y of the height).
 (function (root, factory) {
   const api = factory();

@@ -164,10 +164,10 @@
       if (!ssh) return;
       const question = 'Forget the stored host key of ' + hostPort(host, port)
         + '? The next connection will ask you to confirm the server fingerprint again.';
-      if (!window.confirm(question)) return;
+      if (!(await globalThis.AppDialog.confirm(question, { danger: true }))) return;
       const result = await ssh.forgetHostKey(host, port);
       if (!result || result.success === false) {
-        alert((result && result.error) || 'Failed to forget the host key.');
+        await globalThis.AppDialog.alert((result && result.error) || 'Failed to forget the host key.');
       }
       await load();
     }

@@ -130,15 +130,18 @@ test('focusTarget centers children on their container', () => {
   assert.equal(Search.focusTarget(undefined, byId), null);
 });
 
-test('search scripts load before app.js and app.js uses the hooks', () => {
+test('search.js loads before the app modules and they use the search hooks', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
-  const at = (name) => html.indexOf(`<script src="js/${name}"></script>`);
-  assert.ok(at('search.js') > 0 && at('search.js') < at('search-ui.js'));
-  assert.ok(at('search-ui.js') < at('app.js'));
+  const at = html.indexOf('<script src="js/search.js"></script>');
+  assert.ok(at > 0 && at < html.indexOf('<script type="module" src="js/app/main.js">'));
   assert.match(html, /id="node-search-count"/);
-  const app = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'app.js'), 'utf8');
-  assert.match(app, /CanvasSearch\.filter\(sourceNodes\)/);
-  assert.ok((app.match(/CanvasSearch\.decorate\(\)/g) || []).length >= 2);
+  const read = (file) => fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'app', file), 'utf8');
+  assert.match(read('search-ui.js'), /^export const CanvasSearch = \{/m);
+  assert.match(read('search-ui.js'), /import \{ NodeSearch \} from '\.\/libs\.js';/);
+  assert.match(read('host-list.js'), /CanvasSearch\.filter\(sourceNodes\)/);
+  assert.match(read('canvas-render.js'), /CanvasSearch\.decorate\(\)/);
+  assert.match(read('canvas-links.js'), /CanvasSearch\.decorate\(\)/);
+  assert.match(read('main.js'), /initSearchUi\(\);/);
 });
 
 test('search.js sets a browser global', () => {

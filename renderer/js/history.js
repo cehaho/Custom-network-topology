@@ -1,7 +1,7 @@
 // Per-node latency history: a bounded ring buffer of probe results, the
 // statistics shown on hover, and the sparkline path.
 //
-// Pure logic, no DOM: the hover tooltip lives in latency-ui.js. A sample is
+// Pure logic, no DOM: the hover tooltip lives in app/latency-ui.js. A sample is
 // { at: epoch ms, ok: boolean, rtt: ms or null }. A failed probe keeps its
 // place in the buffer so the sparkline shows a gap and availability counts it.
 (function (root, factory) {

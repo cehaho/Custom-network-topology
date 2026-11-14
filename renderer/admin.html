@@ -3,9 +3,10 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
     <title>Network Topology Admin</title>
     <link rel="stylesheet" href="vendor/tailwind.css">
+    <link rel="stylesheet" href="css/dialog.css">
     <script src="vendor/lucide.min.js"></script>
     <style>
         body { margin: 0; background: #0b1220; color: #e6eef8; min-height: 100vh; }
@@ -19,6 +20,7 @@
 </head>
 <body>
     <div id="admin-root"></div>
+    <script src="js/dialog.js"></script>
     <script src="js/probe-checks.js"></script>
     <script src="js/topology.js"></script>
     <script src="js/probe.js"></script>
@@ -27,8 +29,6 @@
     <script src="js/known-hosts-admin.js"></script>
     <script src="js/snmp.js"></script>
     <script src="js/admin.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => Admin.startStandalone());
-    </script>
+    <script src="js/admin-page.js"></script>
 </body>
 </html>
