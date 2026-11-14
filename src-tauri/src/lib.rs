@@ -1,5 +1,6 @@
 mod config;
 mod hosts;
+mod known_hosts;
 mod monitor;
 mod probe;
 mod network;
@@ -144,6 +145,11 @@ async fn ssh_disconnect(
 }
 
 #[tauri::command]
+fn ssh_forget_host_key(app: tauri::AppHandle, host: String, port: u64) -> Value {
+    ssh::forget_host_key(&app, &host, port)
+}
+
+#[tauri::command]
 fn network_local_info() -> Value {
     Value::Array(network::local_interfaces())
 }
@@ -220,6 +226,7 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_disconnect,
+            ssh_forget_host_key,
             network_local_info,
             network_ping,
             network_scan,

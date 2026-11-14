@@ -1,14 +1,17 @@
 //! One interactive shell per node.
 //!
-//! Host keys are accepted without pinning. The previous client did the same.
-//! Checking the key against a known-hosts file is a later change.
+//! Host keys are pinned per `host:port` in `known_hosts.json` (see
+//! `known_hosts`). An unknown key is refused until the user confirms its
+//! fingerprint; the retry carries that fingerprint in `acceptHostKey`. A key
+//! that differs from the pinned one is always refused.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use russh::client::{Handle, Handler, Msg};
-use russh::keys::{PrivateKey, PrivateKeyWithHashAlg};
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
@@ -16,6 +19,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::hosts::{is_reasonable_username, is_safe_host, is_safe_port};
+use crate::known_hosts::{self, HostKey, Verdict};
 
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_KEY_BYTES: u64 = 1024 * 1024;
@@ -47,16 +51,127 @@ impl Hub {
     }
 }
 
-struct AcceptHostKey;
+/// Why the server key was refused, kept for the reply to the renderer.
+enum HostKeyRefusal {
+    Unknown(HostKey),
+    Mismatch { presented: HostKey, stored: HostKey },
+    Store(String),
+}
 
-impl Handler for AcceptHostKey {
+struct HostKeyCheck {
+    known_hosts: PathBuf,
+    host: String,
+    port: u16,
+    /// Fingerprint the user confirmed for an unknown host, if any.
+    accept: Option<String>,
+    refusal: Arc<StdMutex<Option<HostKeyRefusal>>>,
+}
+
+impl HostKeyCheck {
+    fn verify(&self, presented: HostKey) -> Result<(), HostKeyRefusal> {
+        match known_hosts::check(&self.known_hosts, &self.host, self.port, &presented) {
+            Ok(Verdict::Match) => Ok(()),
+            Ok(Verdict::Mismatch { stored }) => Err(HostKeyRefusal::Mismatch { presented, stored }),
+            Ok(Verdict::Unknown)
+                if self.accept.as_deref() == Some(presented.fingerprint.as_str()) =>
+            {
+                known_hosts::remember(&self.known_hosts, &self.host, self.port, &presented)
+                    .map_err(HostKeyRefusal::Store)
+            }
+            Ok(Verdict::Unknown) => Err(HostKeyRefusal::Unknown(presented)),
+            Err(error) => Err(HostKeyRefusal::Store(error)),
+        }
+    }
+}
+
+impl Handler for HostKeyCheck {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKeyOrCertificate,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let outcome = match describe_host_key(server_public_key) {
+            Ok(presented) => self.verify(presented),
+            Err(error) => Err(HostKeyRefusal::Store(error)),
+        };
+        match outcome {
+            Ok(()) => Ok(true),
+            Err(refusal) => {
+                *self
+                    .refusal
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(refusal);
+                Ok(false)
+            }
+        }
+    }
+}
+
+fn describe_host_key(presented: &PublicKeyOrCertificate) -> Result<HostKey, String> {
+    // For a certificate, pin the certified host key itself.
+    let key_data = match presented {
+        PublicKeyOrCertificate::PublicKey { key, .. } => key.key_data().clone(),
+        PublicKeyOrCertificate::Certificate(certificate) => certificate.public_key().clone(),
+    };
+    let fingerprint = key_data.fingerprint(HashAlg::Sha256).to_string();
+    let public = PublicKey::from(key_data);
+    let key = public
+        .to_openssh()
+        .map_err(|_| "Failed to encode the server host key".to_string())?;
+    Ok(HostKey {
+        algorithm: public.algorithm().to_string(),
+        fingerprint,
+        key: key.trim().to_string(),
+    })
+}
+
+fn host_key_failure(host: &str, port: u16, refusal: HostKeyRefusal) -> Value {
+    let name = known_hosts::entry_name(host, port);
+    match refusal {
+        HostKeyRefusal::Unknown(presented) => json!({
+            "success": false,
+            "error": format!("The host key of {name} is not known yet. Check its fingerprint before trusting it."),
+            "hostKey": {
+                "status": "unknown",
+                "host": host,
+                "port": port,
+                "algorithm": presented.algorithm,
+                "fingerprint": presented.fingerprint,
+            }
+        }),
+        HostKeyRefusal::Mismatch { presented, stored } => json!({
+            "success": false,
+            "error": format!(
+                "Host key mismatch for {name}. The server presented a different key than the one stored. \
+                 Someone may be intercepting the connection, or the server was reinstalled. Connection refused."
+            ),
+            "hostKey": {
+                "status": "mismatch",
+                "host": host,
+                "port": port,
+                "algorithm": presented.algorithm,
+                "fingerprint": presented.fingerprint,
+                "storedAlgorithm": stored.algorithm,
+                "storedFingerprint": stored.fingerprint,
+            }
+        }),
+        HostKeyRefusal::Store(error) => failure(&format!("Host key check failed: {error}")),
+    }
+}
+
+/// Removes the pinned key for `host:port` so the next connection asks again.
+pub fn forget_host_key(app: &AppHandle, host: &str, port: u64) -> Value {
+    if !is_safe_host(host) || port > u64::from(u16::MAX) || !is_safe_port(port as i64) {
+        return failure("Invalid SSH host or port");
+    }
+    let path = match crate::config::known_hosts_path(app) {
+        Ok(path) => path,
+        Err(error) => return failure(&error),
+    };
+    match known_hosts::forget(&path, host, port as u16) {
+        Ok(removed) => json!({ "success": true, "removed": removed }),
+        Err(error) => failure(&error),
     }
 }
 
@@ -111,6 +226,19 @@ pub async fn connect(app: AppHandle, hub: Arc<Mutex<Hub>>, request: Value) -> Va
         }
     }
 
+    let known_hosts = match crate::config::known_hosts_path(&app) {
+        Ok(path) => path,
+        Err(error) => return failure(&format!("Host key check failed: {error}")),
+    };
+    let refusal = Arc::new(StdMutex::new(None));
+    let checker = HostKeyCheck {
+        known_hosts,
+        host: host.to_string(),
+        port: port as u16,
+        accept: non_empty_text(request.get("acceptHostKey")),
+        refusal: Arc::clone(&refusal),
+    };
+
     let opened = open_shell(
         host.to_string(),
         port as u16,
@@ -118,13 +246,19 @@ pub async fn connect(app: AppHandle, hub: Arc<Mutex<Hub>>, request: Value) -> Va
         password,
         key_path,
         passphrase,
+        checker,
     );
-    let (session, mut reader, writer) =
-        match tokio::time::timeout(Duration::from_secs(10), opened).await {
-            Ok(Ok(shell)) => shell,
-            Ok(Err(error)) => return failure(&error),
-            Err(_) => return failure("Connection timed out"),
-        };
+    let outcome = tokio::time::timeout(Duration::from_secs(10), opened).await;
+    let refused = refusal
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    let (session, mut reader, writer) = match (outcome, refused) {
+        (Ok(Ok(shell)), _) => shell,
+        (_, Some(refusal)) => return host_key_failure(host, port as u16, refusal),
+        (Ok(Err(error)), None) => return failure(&error),
+        (Err(_), None) => return failure("Connection timed out"),
+    };
 
     let (tx, mut rx) = unbounded_channel();
     let generation = {
@@ -227,15 +361,15 @@ async fn open_shell(
     password: Option<String>,
     key_path: Option<String>,
     passphrase: Option<String>,
-) -> Result<(Handle<AcceptHostKey>, ChannelReadHalf, ShellWriter), String> {
+    checker: HostKeyCheck,
+) -> Result<(Handle<HostKeyCheck>, ChannelReadHalf, ShellWriter), String> {
     let mut config = russh::client::Config::default();
     config.keepalive_interval = Some(Duration::from_secs(10));
     config.keepalive_max = 3;
     config.nodelay = true;
-    let mut session =
-        russh::client::connect(Arc::new(config), (host.as_str(), port), AcceptHostKey)
-            .await
-            .map_err(|error| error.to_string())?;
+    let mut session = russh::client::connect(Arc::new(config), (host.as_str(), port), checker)
+        .await
+        .map_err(|error| error.to_string())?;
 
     let authenticated = if let Some(path) = key_path {
         let key = load_private_key(&path, passphrase.as_deref())?;

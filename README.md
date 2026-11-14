@@ -41,6 +41,7 @@ npm start
 - **Supervision** : chaque nœud est sondé (ping ICMP, ou connexion TCP si un port est défini). L’intervalle par défaut est de 5 s (`settings.probeIntervalMs`). L’état reste `unknown` jusqu’à deux résultats concordants (`settings.confirmations`) ; un seul échec ne bascule pas le nœud. Au plus une vingtaine de sondes tournent en parallèle. L’historique court est écrit à part dans `status.json`.
 - **Lien actif / secours** : si un nœud a un lien `primary` et un lien `failover`, le lien actif est le primaire tant que le voisin primaire répond ; sinon le secours si son voisin répond ; sinon le primaire (en panne). Seul le lien actif est animé. Le secours reste visible, en attente, tant que le primaire répond.
 - Clic droit sur un nœud pour ouvrir une session SSH dans le panneau latéral. Mot de passe et clé privée sont pris en charge (clés OpenSSH et fichiers PuTTY `.ppk`).
+- **Clés d’hôte SSH (TOFU)** : à la première connexion à un `hôte:port`, la connexion est refusée tant que l’utilisateur n’a pas confirmé l’empreinte SHA256 de la clé présentée par le serveur. Après confirmation, la clé est mémorisée. Si un hôte connu présente une autre clé, la connexion est refusée (attaque de l’homme du milieu possible, ou serveur réinstallé) ; la boîte de dialogue d’erreur propose d’oublier la clé enregistrée, et la connexion suivante redemande une confirmation.
 - Import et export de la topologie en JSON. Un export **ne contient aucun** mot de passe ni passphrase de clé. Il indique seulement, sur chaque nœud, si un secret existe et s’il s’agit d’un mot de passe ou d’une passphrase (`sshSecret.type`).
 
 ## Où est stockée la topologie
@@ -54,6 +55,8 @@ Si vous avez déjà utilisé la build Electron, l’application continue d’uti
 Une installation neuve utilise le répertoire de config Tauri pour `com.custom.network-topology`. Au premier lancement, `renderer/config.json` y est copié.
 
 Les mots de passe SSH et les passphrases de clé **ne sont pas** écrits dans ce fichier. Chacun est stocké dans le **trousseau du système** (service `custom-network-topology`, compte du type `ssh/<id du nœud>/password` ou `ssh/<id du nœud>/passphrase`). Le fichier de topologie ne conserve que `sshSecret.type` (`password` ou `passphrase`) lorsqu’un secret existe. Si le trousseau est indisponible, l’enregistrement d’un mot de passe est refusé : il n’est pas écrit en clair. Un mot de passe déjà scellé en `enc:v1:` est déplacé vers le trousseau au prochain chargement réussi. Une valeur écrite par le safe storage d’Electron ne peut pas être déchiffrée ; le fichier reste inchangé et l’application le signale.
+
+Les clés d’hôte SSH acceptées sont dans `known_hosts.json`, dans le même dossier que le fichier de topologie. Chaque entrée `hôte:port` contient l’algorithme, l’empreinte SHA256 et la clé publique complète. Ce fichier ne contient aucun secret.
 
 ## Structure du projet
 
@@ -154,7 +157,6 @@ Couvre la validation des hôtes, le document de topologie, la confirmation de so
 ## Limites
 
 - Découverte et supervision en IPv4 uniquement.
-- Le SSH accepte la clé d’hôte du serveur sans la mémoriser. Pas de contrôle known-hosts dans cette version.
 - Le canevas n’est testé que par sa géométrie. Le rendu DOM/SVG réel, les événements souris (glisser, déposer dans un conteneur, création de lien) et l’aspect visuel ne sont pas testés automatiquement.
 
 ## Licence
