@@ -1,6 +1,7 @@
 mod config;
 mod hosts;
 mod known_hosts;
+mod known_hosts_admin;
 mod monitor;
 mod probe;
 mod network;
@@ -150,6 +151,16 @@ fn ssh_forget_host_key(app: tauri::AppHandle, host: String, port: u64) -> Value 
 }
 
 #[tauri::command]
+fn ssh_known_hosts_list(app: tauri::AppHandle) -> Value {
+    known_hosts_admin::list(&app)
+}
+
+#[tauri::command]
+fn ssh_known_hosts_import_openssh(app: tauri::AppHandle) -> Value {
+    known_hosts_admin::import_openssh(&app)
+}
+
+#[tauri::command]
 fn network_local_info() -> Value {
     Value::Array(network::local_interfaces())
 }
@@ -232,6 +243,8 @@ pub fn run() {
             ssh_resize,
             ssh_disconnect,
             ssh_forget_host_key,
+            ssh_known_hosts_list,
+            ssh_known_hosts_import_openssh,
             network_local_info,
             network_ping,
             network_scan,

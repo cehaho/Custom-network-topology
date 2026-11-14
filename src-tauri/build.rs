@@ -11,6 +11,8 @@ fn main() {
         "ssh_resize",
         "ssh_disconnect",
         "ssh_forget_host_key",
+        "ssh_known_hosts_list",
+        "ssh_known_hosts_import_openssh",
         "network_local_info",
         "network_ping",
         "network_scan",

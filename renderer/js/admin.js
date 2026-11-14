@@ -26,6 +26,7 @@
     root.classList.add('open');
     bind();
     render();
+    if (window.KnownHostsAdmin) KnownHostsAdmin.mount(document.getElementById('admin-known-hosts'));
     if (window.lucide) lucide.createIcons();
   }
 
@@ -152,6 +153,7 @@
             <button id="admin-add" class="w-full py-3 border-2 border-dashed border-slate-600 text-slate-500 rounded-lg hover:border-blue-500 hover:text-blue-400">Add New Device Node</button>
           </div>
         </div>
+        <div id="admin-known-hosts"></div>
       </div>`;
   }
 
