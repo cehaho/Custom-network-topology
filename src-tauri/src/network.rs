@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::latency::parse_ping_time;
 use crate::hosts::{
     clamp_scan_range, is_safe_base_ip, is_safe_host, is_safe_port, normalize_host,
     ping_command as ping_argv,
@@ -27,6 +28,8 @@ const BATCH_SIZE: i64 = 20;
 pub struct Probe {
     pub online: bool,
     pub duration_ms: u64,
+    /// Round-trip time read from the reply line, when `ping` printed one.
+    pub rtt_ms: Option<f64>,
 }
 
 pub async fn ping_host(host: &str, timeout: Duration) -> Probe {
@@ -35,12 +38,14 @@ pub async fn ping_host(host: &str, timeout: Duration) -> Probe {
         return Probe {
             online: false,
             duration_ms: 0,
+            rtt_ms: None,
         };
     };
-    let online = run_ping(&host, timeout).await;
+    let (online, rtt_ms) = run_ping(&host, timeout).await;
     Probe {
         online,
         duration_ms: start.elapsed().as_millis() as u64,
+        rtt_ms: if online { rtt_ms } else { None },
     }
 }
 
@@ -140,6 +145,7 @@ pub async fn ping_command(host: &str) -> Value {
         "success": result.online,
         "host": host,
         "duration": result.duration_ms,
+        "rtt": result.rtt_ms,
     })
 }
 
@@ -358,23 +364,25 @@ pub fn parse_arp(stdout: &str, windows: bool) -> Vec<Value> {
         .collect()
 }
 
-async fn run_ping(host: &str, timeout: Duration) -> bool {
+/// Exit status of one echo request, and the round-trip time printed on its
+/// reply line. On a timeout the future is dropped and `kill_on_drop` ends ping.
+async fn run_ping(host: &str, timeout: Duration) -> (bool, Option<f64>) {
     let (program, args) = ping_argv(host, std::env::consts::OS);
     let mut command = Command::new(program);
     command
         .args(args)
         .kill_on_drop(true)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let Ok(mut child) = command.spawn() else {
-        return false;
+    let Ok(child) = command.spawn() else {
+        return (false, None);
     };
-    match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => status.success(),
-        _ => {
-            let _ = child.kill().await;
-            false
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            (output.status.success(), parse_ping_time(&text))
         }
+        _ => (false, None),
     }
 }
 
