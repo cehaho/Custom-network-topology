@@ -38,6 +38,8 @@
       resize: (nodeId, cols, rows) => invoke('ssh_resize', { nodeId, cols, rows }),
       disconnect: (nodeId) => invoke('ssh_disconnect', { nodeId }),
       forgetHostKey: (host, port) => invoke('ssh_forget_host_key', { host, port }),
+      listHostKeys: () => invoke('ssh_known_hosts_list'),
+      importOpenSshKnownHosts: () => invoke('ssh_known_hosts_import_openssh'),
       browseKey: () => invoke('ssh_browse_key'),
       onData: (callback) => subscribe('ssh-data', callback),
       onClosed: (callback) => subscribe('ssh-closed', callback)

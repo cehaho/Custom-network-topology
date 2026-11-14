@@ -18,6 +18,8 @@
     "allow-ssh-resize",
     "allow-ssh-disconnect",
     "allow-ssh-forget-host-key",
+    "allow-ssh-known-hosts-list",
+    "allow-ssh-known-hosts-import-openssh",
     "allow-network-local-info",
     "allow-network-ping",
     "allow-network-scan",
