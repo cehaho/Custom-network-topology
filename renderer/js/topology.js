@@ -34,7 +34,9 @@
       snapToGrid: true,
       theme: 'dark',
       probeIntervalMs: 5000,
-      confirmations: 2
+      confirmations: 2,
+      alertsEnabled: true,
+      alertCooldownMs: 60000
     };
   }
 
@@ -177,6 +179,8 @@
     const settings = Object.assign(defaultSettings(), source);
     settings.probeIntervalMs = clampInterval(settings.probeIntervalMs);
     settings.confirmations = clampConfirmations(settings.confirmations);
+    settings.alertsEnabled = settings.alertsEnabled !== false;
+    settings.alertCooldownMs = clampAlertCooldown(settings.alertCooldownMs);
     return settings;
   }
 
@@ -184,6 +188,13 @@
     const value = Number(requested);
     if (Number.isFinite(value) && value >= 1000 && value <= 60000) return value;
     return 5000;
+  }
+
+  // Keep aligned with renderer/js/alerts.js and src-tauri/src/topology.rs.
+  function clampAlertCooldown(requested) {
+    const value = Number(requested);
+    if (Number.isFinite(value) && value >= 5000 && value <= 3600000) return Math.floor(value);
+    return 60000;
   }
 
   function clampConfirmations(requested) {

@@ -3194,6 +3194,7 @@ function setupMonitoringListener() {
       return copy;
     });
 
+    if (window.AlertNotifier) window.AlertNotifier.observe(networkData, config.settings);
     renderTree(networkData);
     renderHostList(networkData);
   });
@@ -3203,6 +3204,7 @@ async function startMonitoring() {
   if (!window.desktopAPI || monitoringActive) return;
 
   const settings = config.settings || {};
+  if (window.AlertNotifier) window.AlertNotifier.reset();
   await window.desktopAPI.monitor.start({
     nodes: (config.nodes || []).map((node) => ({
       id: node.id,

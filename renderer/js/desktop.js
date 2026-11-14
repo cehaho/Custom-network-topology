@@ -55,6 +55,9 @@
       stop: () => invoke('monitor_stop'),
       onStatus: (callback) => subscribe('monitor-status', callback)
     },
+    alerts: {
+      notify: (title, body) => invoke('alerts_notify', { title, body })
+    },
     platform,
     isDesktop: true
   };

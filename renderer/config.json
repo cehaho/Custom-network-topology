@@ -6,7 +6,9 @@
     "snapToGrid": true,
     "theme": "dark",
     "probeIntervalMs": 5000,
-    "confirmations": 2
+    "confirmations": 2,
+    "alertsEnabled": true,
+    "alertCooldownMs": 60000
   },
   "nodes": [
     {
