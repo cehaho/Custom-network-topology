@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 pub const SCHEMA_VERSION: i64 = 1;
 
-const RUNTIME_FIELDS: &[&str] = &["status", "uptime", "activeParentId", "level", "responseTime"];
+const RUNTIME_FIELDS: &[&str] = &["status", "uptime", "activeParentId", "level", "responseTime", "probeDetail"];
 const PARENT_FIELDS: &[&str] = &["primaryParentId", "secondaryParentId"];
 
 pub fn empty_document() -> Value {
@@ -33,14 +33,16 @@ fn default_settings() -> Value {
         "snapToGrid": true,
         "theme": "dark",
         "probeIntervalMs": 5000,
-        "confirmations": 2
+        "confirmations": 2,
+        "alertsEnabled": true,
+        "alertCooldownMs": 60000
     })
 }
 
 fn validate_incoming(value: &Value) -> Result<(), String> {
     if let Value::Array(nodes) = value {
         if nodes.iter().all(Value::is_object) {
-            return Ok(());
+            return nodes.iter().try_for_each(crate::probe_kinds::check_node);
         }
         return Err("Configuration nodes must be objects".to_string());
     }
@@ -55,6 +57,9 @@ fn validate_incoming(value: &Value) -> Result<(), String> {
     };
     if !nodes.iter().all(Value::is_object) {
         return Err("Configuration nodes must be objects".to_string());
+    }
+    for node in nodes {
+        crate::probe_kinds::check_node(node)?;
     }
     if let Some(version) = map.get("schemaVersion") {
         if version.as_i64() != Some(SCHEMA_VERSION) {
@@ -113,6 +118,9 @@ fn migrate(value: Value) -> Value {
             continue;
         };
         ensure_default_ports(object);
+        crate::actions::normalize_action_fields(object);
+        crate::probe_kinds::normalize_node(object);
+        crate::snmp::model::normalize_node(object);
         if let Some(Value::Array(ports)) = object.get("ports").cloned() {
             let normalized = ports.iter().filter_map(normalize_port).collect();
             object.insert("ports".to_string(), Value::Array(normalized));
@@ -196,7 +204,19 @@ fn normalize_settings(value: Option<&Value>) -> Value {
     );
     settings.insert("probeIntervalMs".to_string(), json!(interval));
     settings.insert("confirmations".to_string(), json!(confirmations));
+    let alerts_enabled = settings.get("alertsEnabled").and_then(Value::as_bool) != Some(false);
+    let alert_cooldown = alert_cooldown_ms(settings.get("alertCooldownMs").and_then(Value::as_f64));
+    settings.insert("alertsEnabled".to_string(), json!(alerts_enabled));
+    settings.insert("alertCooldownMs".to_string(), json!(alert_cooldown));
     Value::Object(settings)
+}
+
+/// Keep aligned with `renderer/js/alerts.js` and `renderer/js/topology.js`.
+fn alert_cooldown_ms(requested: Option<f64>) -> u64 {
+    match requested {
+        Some(value) if value.is_finite() && (5000.0..=3_600_000.0).contains(&value) => value as u64,
+        _ => 60_000,
+    }
 }
 
 fn attach_detached_ports(nodes: &mut [Value], ports: &Value) {
@@ -311,6 +331,7 @@ fn normalize_link(raw: &Value) -> Option<Value> {
         };
         link.insert("id".to_string(), Value::String(fallback));
     }
+    crate::snmp::model::normalize_link(&mut link);
     Some(Value::Object(link))
 }
 
@@ -653,6 +674,27 @@ mod tests {
     }
 
     #[test]
+    fn alert_settings_default_keep_and_clamp() {
+        let missing = read_document(json!({ "nodes": [], "settings": { "showGrid": false } })).unwrap();
+        assert_eq!(missing["settings"]["alertsEnabled"], true);
+        assert_eq!(missing["settings"]["alertCooldownMs"], 60000);
+        let kept = read_document(json!({
+            "nodes": [],
+            "settings": { "alertsEnabled": false, "alertCooldownMs": 300000 }
+        }))
+        .unwrap();
+        assert_eq!(kept["settings"]["alertsEnabled"], false);
+        assert_eq!(kept["settings"]["alertCooldownMs"], 300000);
+        let clamped = read_document(json!({
+            "nodes": [],
+            "settings": { "alertsEnabled": "no", "alertCooldownMs": 1 }
+        }))
+        .unwrap();
+        assert_eq!(clamped["settings"]["alertsEnabled"], true);
+        assert_eq!(clamped["settings"]["alertCooldownMs"], 60000);
+    }
+
+    #[test]
     fn probe_settings_fall_back_to_five_seconds_and_two_confirmations() {
         let prepared = read_document(json!({
             "nodes": [],
@@ -668,6 +710,30 @@ mod tests {
         .unwrap();
         assert_eq!(kept["settings"]["probeIntervalMs"], 2000);
         assert_eq!(kept["settings"]["confirmations"], 4);
+    }
+
+    #[test]
+    fn node_probes_are_checked_and_kept_in_canonical_form() {
+        let document = read_document(json!({
+            "nodes": [
+                { "id": "plain", "address": "10.0.0.1", "port": 22 },
+                { "id": "web", "address": "10.0.0.2", "probe": { "tcp": { "ports": [443, "80"] }, "http": { "scheme": "https" } } },
+                { "id": "empty", "address": "10.0.0.3", "probe": {} }
+            ]
+        }))
+        .unwrap();
+        assert!(document["nodes"][0].get("probe").is_none());
+        assert_eq!(document["nodes"][0]["port"], 22);
+        assert_eq!(document["nodes"][1]["probe"]["tcp"], json!({ "ports": [443, 80], "mode": "all" }));
+        assert_eq!(document["nodes"][1]["probe"]["http"]["insecureTls"], false);
+        assert_eq!(document["nodes"][1]["probe"]["http"]["expectStatus"], "200-399");
+        assert!(document["nodes"][2].get("probe").is_none());
+
+        let refused = read_document(json!({
+            "nodes": [{ "id": "gw", "probe": { "http": { "host": "evil.example" } } }]
+        }));
+        assert!(refused.unwrap_err().starts_with("Node gw probe:"));
+        assert!(read_document(json!([{ "id": "gw", "probe": { "dns": { "name": "a b" } } }])).is_err());
     }
 
     #[test]

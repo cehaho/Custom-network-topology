@@ -3,20 +3,29 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://cdn.tailwindcss.com https://unpkg.com;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
     <title>Network Topology Admin</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="vendor/tailwind.css">
+    <script src="vendor/lucide.min.js"></script>
     <style>
         body { margin: 0; background: #0b1220; color: #e6eef8; min-height: 100vh; }
         #admin-root.open { display: block; }
+        :root { color-scheme: dark; }
+        /* WebKitGTK draws native selects with the light GTK theme; draw them ourselves. */
+        select { -webkit-appearance: none; appearance: none; background-color: #0f172a !important; color: #e6eef8 !important;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+          background-repeat: no-repeat; background-position: right 8px center; padding-right: 26px !important; }
     </style>
 </head>
 <body>
     <div id="admin-root"></div>
+    <script src="js/probe-checks.js"></script>
     <script src="js/topology.js"></script>
     <script src="js/probe.js"></script>
+    <script src="js/alerts.js"></script>
     <script src="js/desktop.js"></script>
+    <script src="js/known-hosts-admin.js"></script>
+    <script src="js/snmp.js"></script>
     <script src="js/admin.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => Admin.startStandalone());

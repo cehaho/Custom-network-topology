@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::hosts::{confirmation_count, is_safe_host, is_safe_port};
+use crate::hosts::{confirmation_count, is_safe_port, normalize_host};
 
 pub const PROBE_LIMIT: usize = 20;
 pub const HISTORY_LIMIT: usize = 50;
@@ -82,16 +82,15 @@ pub enum ProbePlan {
 
 pub fn plan_probe(node: &Map<String, Value>) -> Option<ProbePlan> {
     let address = node.get("address").and_then(Value::as_str).unwrap_or("");
-    if !is_safe_host(address) {
-        return None;
-    }
+    // Accepts `[::1]` as well as `::1`; the plan always holds the bare host.
+    let address = normalize_host(address)?;
     match node.get("port") {
-        None | Some(Value::Null) => Some(ProbePlan::Ping(address.to_string())),
-        Some(Value::String(text)) if text.is_empty() => Some(ProbePlan::Ping(address.to_string())),
+        None | Some(Value::Null) => Some(ProbePlan::Ping(address)),
+        Some(Value::String(text)) if text.is_empty() => Some(ProbePlan::Ping(address)),
         Some(port) => {
             let port = parse_port(port)?;
             Some(ProbePlan::Tcp {
-                host: address.to_string(),
+                host: address,
                 port,
             })
         }
@@ -280,6 +279,25 @@ mod tests {
             plan_probe(&node("10.0.0.1", Some(Value::Null))),
             Some(ProbePlan::Ping(_))
         ));
+    }
+
+    #[test]
+    fn ipv6_addresses_are_probes() {
+        assert!(matches!(
+            plan_probe(&node("2001:db8::1", None)),
+            Some(ProbePlan::Ping(host)) if host == "2001:db8::1"
+        ));
+        assert!(matches!(
+            plan_probe(&node("[::1]", Some(json!(22)))),
+            Some(ProbePlan::Tcp { host, port: 22 }) if host == "::1"
+        ));
+        assert!(matches!(
+            plan_probe(&node("fe80::1%eth0", None)),
+            Some(ProbePlan::Ping(host)) if host == "fe80::1%eth0"
+        ));
+        assert!(plan_probe(&node("::1;id", None)).is_none());
+        assert!(plan_probe(&node("[::1]:22", None)).is_none());
+        assert!(plan_probe(&node("fe80::1%$(id)", None)).is_none());
     }
 
     #[test]

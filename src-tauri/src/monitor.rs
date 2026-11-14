@@ -28,6 +28,9 @@ struct Measured {
     id: String,
     online: Option<bool>,
     response_time: Option<u64>,
+    /// Round-trip time of this probe in ms; `None` when it failed.
+    rtt: Option<f64>,
+    detail: Option<String>,
 }
 
 pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
@@ -67,12 +70,16 @@ pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
                     }
                 }
                 let entries = history.get(&sample.id).map(Vec::as_slice).unwrap_or(&[]);
-                public.push(public_node(
-                    &sample.id,
-                    slot.state,
-                    sample.response_time,
-                    entries,
-                ));
+                let mut entry = public_node(&sample.id, slot.state, sample.response_time, entries);
+                with_latency(&mut entry, sample.online, sample.rtt);
+                public.push(entry);
+                // Which check failed (or passed), for a node with a `probe`.
+                if let (Some(detail), Some(item)) = (
+                    &sample.detail,
+                    public.last_mut().and_then(Value::as_object_mut),
+                ) {
+                    item.insert("detail".to_string(), json!(detail));
+                }
             }
             let before = history.len();
             history.retain(|id, _| seen.contains(id));
@@ -93,6 +100,20 @@ pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
             tokio::time::sleep(pause).await;
         }
     })
+}
+
+/// Adds the raw result of this probe to the event: `reachable` (this one
+/// sample, before confirmation; `null` when nothing was probed) and `rtt`
+/// (round-trip ms with sub-millisecond precision, `null` on failure).
+fn with_latency(entry: &mut Value, online: Option<bool>, rtt: Option<f64>) {
+    if let Value::Object(object) = entry {
+        object.insert("reachable".to_string(), json!(online));
+        let rtt = rtt.filter(|ms| ms.is_finite() && *ms >= 0.0);
+        object.insert(
+            "rtt".to_string(),
+            json!(rtt.map(|ms| (ms * 1000.0).round() / 1000.0)),
+        );
+    }
 }
 
 fn configured_interval(config: &Value) -> Option<f64> {
@@ -144,8 +165,34 @@ async fn measure_one(node: Value) -> Measured {
             id,
             online: None,
             response_time: None,
+            rtt: None,
+            detail: None,
         };
     };
+    // A `probe` object replaces the default ping / TCP probe.
+    match crate::probe_kinds::plan(object) {
+        crate::probe_kinds::RichPlan::Default => {}
+        crate::probe_kinds::RichPlan::Skip => {
+            return Measured {
+                id,
+                online: None,
+                response_time: None,
+                rtt: None,
+                detail: None,
+            };
+        }
+        crate::probe_kinds::RichPlan::Run(host, checks) => {
+            let outcome = crate::probe_kinds::run(&host, &checks).await;
+            return Measured {
+                id,
+                online: Some(outcome.online),
+                response_time: Some(outcome.elapsed_ms),
+                // Rich checks run in parallel; their wall time stands in for RTT.
+                rtt: outcome.online.then_some(outcome.elapsed_ms as f64),
+                detail: Some(outcome.detail),
+            };
+        }
+    }
     // `plan_probe` drops an unsafe address. Nothing below builds a command
     // string from it: ping receives argv, TCP receives a socket address.
     let Some(plan) = plan_probe(object) else {
@@ -153,24 +200,36 @@ async fn measure_one(node: Value) -> Measured {
             id,
             online: None,
             response_time: None,
+            rtt: None,
+            detail: None,
         };
     };
     match plan {
         ProbePlan::Ping(host) => {
             let result = ping_host(&host, Duration::from_millis(2000)).await;
+            // The reply line's time is the round trip; the wall time of the
+            // ping process stands in when the output had no time.
+            let rtt = result
+                .online
+                .then(|| result.rtt_ms.unwrap_or(result.duration_ms as f64));
             Measured {
                 id,
                 online: Some(result.online),
-                response_time: Some(result.duration_ms),
+                response_time: Some(rtt.map_or(result.duration_ms, |ms| ms.round() as u64)),
+                rtt,
+                detail: None,
             }
         }
         ProbePlan::Tcp { host, port } => {
             let started = Instant::now();
             let online = check_port(&host, port, Duration::from_millis(1000)).await;
+            let elapsed = started.elapsed();
             Measured {
                 id,
                 online: Some(online),
-                response_time: Some(started.elapsed().as_millis() as u64),
+                response_time: Some(elapsed.as_millis() as u64),
+                rtt: online.then(|| elapsed.as_secs_f64() * 1000.0),
+                detail: None,
             }
         }
     }

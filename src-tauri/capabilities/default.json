@@ -17,11 +17,23 @@
     "allow-ssh-write",
     "allow-ssh-resize",
     "allow-ssh-disconnect",
+    "allow-ssh-forget-host-key",
+    "allow-ssh-known-hosts-list",
+    "allow-ssh-known-hosts-import-openssh",
     "allow-network-local-info",
     "allow-network-ping",
     "allow-network-scan",
     "allow-network-arp",
+    "allow-network-neighbors",
+    "allow-network-enrich",
     "allow-monitor-start",
-    "allow-monitor-stop"
+    "allow-monitor-stop",
+    "allow-alerts-notify",
+    "allow-image-export",
+    "allow-actions-open-web",
+    "allow-actions-traceroute",
+    "allow-actions-wake",
+    "allow-snmp-start",
+    "allow-snmp-stop"
   ]
 }

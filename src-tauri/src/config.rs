@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
-use crate::secrets::{SecretStore, SecretValue};
+use crate::secrets::SecretValue;
 
 const MAX_CONFIG_BYTES: usize = 5 * 1024 * 1024;
 const SAMPLE: &str = include_str!("../../renderer/config.json");
@@ -292,6 +292,11 @@ fn status_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(resolve_config_path(app)?.with_file_name("status.json"))
 }
 
+/// Pinned SSH host keys live beside the topology file. Public data only.
+pub fn known_hosts_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_config_path(app)?.with_file_name("known_hosts.json"))
+}
+
 fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(legacy) = legacy_config_path() {
         if legacy.is_file() {
@@ -327,7 +332,7 @@ fn legacy_config_path() -> Option<PathBuf> {
     }
 }
 
-fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

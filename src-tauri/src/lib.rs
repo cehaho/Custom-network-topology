@@ -1,9 +1,18 @@
+mod alerts;
+mod actions;
 mod config;
+mod export;
+mod enrich;
 mod hosts;
+mod known_hosts;
+mod latency;
+mod known_hosts_admin;
 mod monitor;
 mod probe;
+mod probe_kinds;
 mod network;
 mod secrets;
+mod snmp;
 mod ssh;
 mod topology;
 
@@ -51,9 +60,9 @@ fn config_save(
     result
 }
 
-fn pending_import(
-    state: &tauri::State<'_, AppState>,
-) -> std::sync::MutexGuard<'_, Option<PendingImport>> {
+fn pending_import<'a>(
+    state: &'a tauri::State<'_, AppState>,
+) -> std::sync::MutexGuard<'a, Option<PendingImport>> {
     state
         .pending_import
         .lock()
@@ -77,13 +86,18 @@ fn take_matching_import(
     }
 }
 
+// Commands that open a native file dialog are async: a sync command runs on
+// the main thread, and a blocking dialog there freezes the GTK main loop.
 #[tauri::command]
-fn config_export(app: tauri::AppHandle, config: Value) -> Value {
+async fn config_export(app: tauri::AppHandle, config: Value) -> Value {
     config::export(&app, config)
 }
 
 #[tauri::command]
-fn config_import(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Value {
+async fn config_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
     let imported = config::import(&app);
     let mut guard = pending_import(&state);
     *guard = match (imported.token, imported.secrets.is_empty()) {
@@ -93,7 +107,7 @@ fn config_import(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Va
         }),
         _ => None,
     };
-    imported.response
+    Ok(imported.response)
 }
 
 #[tauri::command]
@@ -103,7 +117,7 @@ fn config_discard_import(state: tauri::State<'_, AppState>) -> Value {
 }
 
 #[tauri::command]
-fn ssh_browse_key(app: tauri::AppHandle) -> Value {
+async fn ssh_browse_key(app: tauri::AppHandle) -> Value {
     config::browse_key(&app)
 }
 
@@ -144,6 +158,21 @@ async fn ssh_disconnect(
 }
 
 #[tauri::command]
+fn ssh_forget_host_key(app: tauri::AppHandle, host: String, port: u64) -> Value {
+    ssh::forget_host_key(&app, &host, port)
+}
+
+#[tauri::command]
+fn ssh_known_hosts_list(app: tauri::AppHandle) -> Value {
+    known_hosts_admin::list(&app)
+}
+
+#[tauri::command]
+async fn ssh_known_hosts_import_openssh(app: tauri::AppHandle) -> Value {
+    known_hosts_admin::import_openssh(&app)
+}
+
+#[tauri::command]
 fn network_local_info() -> Value {
     Value::Array(network::local_interfaces())
 }
@@ -169,6 +198,16 @@ async fn network_arp() -> Value {
 }
 
 #[tauri::command]
+async fn network_neighbors() -> Value {
+    Value::Array(network::ipv6_neighbors().await)
+}
+
+#[tauri::command]
+async fn network_enrich(app: tauri::AppHandle, hosts: Vec<Value>) -> Value {
+    enrich::enrich(&app, &hosts).await
+}
+
+#[tauri::command]
 async fn monitor_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -190,10 +229,41 @@ async fn monitor_stop(state: tauri::State<'_, AppState>) -> Result<Value, String
     Ok(serde_json::json!({ "success": true }))
 }
 
+#[tauri::command]
+fn actions_open_web(
+    app: tauri::AppHandle,
+    address: String,
+    scheme: Option<String>,
+    port: Option<u16>,
+) -> Value {
+    use tauri_plugin_opener::OpenerExt;
+    let Some(url) = actions::build_web_url(&address, scheme.as_deref(), port) else {
+        return serde_json::json!({ "success": false, "error": "Invalid address, scheme or port" });
+    };
+    match app.opener().open_url(url.as_str(), None::<&str>) {
+        Ok(()) => serde_json::json!({ "success": true, "url": url }),
+        Err(error) => {
+            serde_json::json!({ "success": false, "url": url, "error": error.to_string() })
+        }
+    }
+}
+
+#[tauri::command]
+async fn actions_traceroute(host: String) -> Value {
+    actions::traceroute(&host).await
+}
+
+#[tauri::command]
+async fn actions_wake(mac: String, broadcast: Option<String>) -> Value {
+    actions::wake(&mac, broadcast.as_deref()).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             ssh: Arc::new(Mutex::new(ssh::Hub::new())),
             monitor: Mutex::new(None),
@@ -220,12 +290,24 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_disconnect,
+            ssh_forget_host_key,
+            ssh_known_hosts_list,
+            ssh_known_hosts_import_openssh,
             network_local_info,
             network_ping,
             network_scan,
             network_arp,
+            network_neighbors,
+            network_enrich,
             monitor_start,
             monitor_stop,
+            alerts::alerts_notify,
+            export::image_export,
+            actions_open_web,
+            actions_traceroute,
+            actions_wake,
+            snmp::snmp_start,
+            snmp::snmp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

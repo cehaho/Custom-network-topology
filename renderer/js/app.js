@@ -63,6 +63,7 @@ async function init() {
   setupEventListeners();
   await loadConfig();
   setupMonitoringListener();
+  SnmpUI.attach(() => requestAnimationFrame(drawLines));
 
   // Initialize theme
   initTheme();
@@ -70,14 +71,14 @@ async function init() {
   // Initialize minimap
   initMinimap();
 
-  if (window.electronAPI) startMonitoring();
+  if (window.desktopAPI) startMonitoring();
 }
 
 async function loadConfig() {
   try {
     let raw = null;
-    if (window.electronAPI) {
-      raw = await window.electronAPI.config.load();
+    if (window.desktopAPI) {
+      raw = await window.desktopAPI.config.load();
     } else {
       const res = await fetch('config.json');
       if (res.ok) raw = await res.json();
@@ -95,7 +96,7 @@ async function loadConfig() {
       return;
     }
     config = loaded.document;
-    if (loaded.changed && window.electronAPI) await saveConfig();
+    if (loaded.changed && window.desktopAPI) await saveConfig();
 
     updateSnapButton();
     renderTree(config.nodes);
@@ -113,7 +114,7 @@ async function saveConfig() {
   }
   const snapshot = prepared.document;
   try {
-    if (!window.electronAPI) {
+    if (!window.desktopAPI) {
       config = snapshot;
       if (Topology.hasSecretValues(snapshot)) {
         (config.nodes || []).forEach((node) => Topology.stripNodeSecretValues(node));
@@ -124,7 +125,7 @@ async function saveConfig() {
       }
       return { success: true };
     }
-    const result = await window.electronAPI.config.save(snapshot, pendingImportToken);
+    const result = await window.desktopAPI.config.save(snapshot, pendingImportToken);
     if (result && result.success !== false && result.config) {
       const loaded = Topology.read(result.config);
       config = loaded.ok ? loaded.document : Topology.withoutSecretValues(snapshot);
@@ -143,8 +144,8 @@ async function saveConfig() {
 }
 
 async function importTopologyInteractive() {
-  if (!window.electronAPI) return null;
-  const result = await window.electronAPI.config.import();
+  if (!window.desktopAPI) return null;
+  const result = await window.desktopAPI.config.import();
   if (!result || result.canceled) return null;
   if (!result.success || !result.config) {
     toastError('Import refused', (result && result.error) || 'Import failed');
@@ -157,7 +158,7 @@ async function importTopologyInteractive() {
   }
   if (!window.confirm(Topology.importMessage(loaded.document))) {
     pendingImportToken = null;
-    if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+    if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
     return null;
   }
   pendingImportToken = result.importToken || null;
@@ -215,6 +216,7 @@ function openAdminPanel() {
           node.name = configNode.name;
           node.address = configNode.address;
           node.port = configNode.port;
+          node.probe = configNode.probe;
           node.icon = configNode.icon;
           node.iconType = configNode.iconType;
           node.ports = configNode.ports;
@@ -279,29 +281,11 @@ function drawGridSystem() {
 }
 
 function snapToGrid(x, y) {
-  if (!config.settings.snapToGrid) return { x, y };
-
-  // Snap to 5% grid (matching the visual grid)
-  const gridStep = 5;
-  const offset = 2.5; // Center of grid cell
-
-  const snappedX = Math.round((x - offset) / gridStep) * gridStep + offset;
-  const snappedY = Math.round((y - offset) / gridStep) * gridStep + offset;
-
-  return {
-    x: Math.max(2.5, Math.min(97.5, snappedX)),
-    y: Math.max(2.5, Math.min(247.5, snappedY)) // 50 rows * 5% = 250%, center at 247.5
-  };
+  return TopologyCanvas.snapToGrid(x, y, config.settings.snapToGrid);
 }
 
 function getGridCell(x, y) {
-  const colIndex = Math.floor((x - 0.01) / 5);
-  const rowIndex = Math.floor((y - 0.01) / 5) + 1;
-
-  const col = colIndex >= 0 && colIndex < gridCols.length ? gridCols[colIndex] : '?';
-  const row = rowIndex >= 1 && rowIndex <= 50 ? rowIndex : '?';
-
-  return { col, row };
+  return TopologyCanvas.gridCell(x, y, gridCols);
 }
 
 // ============================================
@@ -312,13 +296,10 @@ function setupEventListeners() {
   // Zoom
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const xs = (e.clientX - pointX) / scale;
-    const ys = (e.clientY - pointY) / scale;
-    const delta = -e.deltaY;
-    scale = delta > 0 ? scale * 1.1 : scale / 1.1;
-    scale = Math.min(Math.max(0.1, scale), 5);
-    pointX = e.clientX - xs * scale;
-    pointY = e.clientY - ys * scale;
+    const next = TopologyCanvas.zoomAt({ scale, pointX, pointY }, e.clientX, e.clientY, e.deltaY);
+    scale = next.scale;
+    pointX = next.pointX;
+    pointY = next.pointY;
     updateTransform();
   });
 
@@ -451,14 +432,14 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
-    if (!window.electronAPI) return;
+    if (!window.desktopAPI) return;
     const prepared = Topology.prepare(config);
     if (!prepared.ok) {
       toastError('Export refused', prepared.error);
       return;
     }
     const exported = Topology.withoutSecretValues(prepared.document);
-    const result = await window.electronAPI.config.export(exported);
+    const result = await window.desktopAPI.config.export(exported);
     if (result && result.success === false && !result.canceled) {
       toastError('Export refused', result.error || 'Export failed');
     }
@@ -557,8 +538,10 @@ function statusView(status) {
 
 function statusLabel(node, statusById, view) {
   const active = Probe.activeLink(config.links, node.id, statusById);
-  if (active && active.role === 'failover') return view.label + ' · FAILOVER';
-  return view.label;
+  const label = active && active.role === 'failover' ? view.label + ' · FAILOVER' : view.label;
+  // `probeDetail` names the check that failed (or passed) for a node with a `probe`.
+  if (node.probeDetail) return `<span title="${escapeHtml(node.probeDetail)}">${label}</span>`;
+  return label;
 }
 
 function linkAppearance(conn, nodes) {
@@ -681,6 +664,7 @@ function renderTree(nodes) {
     el.id = `node-${node.id}`;
     el.className = `node-container card is-container container-${safeContainerType(node.containerType)}`;
     el.dataset.nodeId = node.id;
+    SnmpUI.decorateNode(el, node.id);
     el.dataset.isContainer = 'true';
 
     // Get children of this container
@@ -732,7 +716,7 @@ function renderTree(nodes) {
           </div>
           <div class="child-node-info">
             <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
-            <div class="child-node-address">${escapeHtml(child.address || '')}</div>
+            <div class="child-node-address" title="${escapeHtml(child.address || '')}">${escapeHtml(child.address || '')}</div>
           </div>
           <div class="child-node-status ${childView.className}">
             ${childView.short}
@@ -881,6 +865,7 @@ function renderTree(nodes) {
     el.id = `node-${node.id}`;
     el.className = 'node-container card';
     el.dataset.nodeId = node.id;
+    SnmpUI.decorateNode(el, node.id);
 
     let leftPos, topPos;
     if (node.x !== null && node.x !== undefined) {
@@ -943,6 +928,7 @@ function renderTree(nodes) {
   });
 
   lucide.createIcons();
+  CanvasSearch.decorate();
   requestAnimationFrame(drawLines);
 }
 
@@ -1002,13 +988,14 @@ function drawLines() {
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', baseColor);
     path.setAttribute('stroke-width', '2');
-    path.setAttribute('stroke-opacity', look.waiting ? '0.28' : '0.45');
-    if (look.waiting) path.setAttribute('stroke-dasharray', '2 7');
+    const stroke = TopologyCanvas.linkStroke(look);
+    path.setAttribute('stroke-opacity', stroke.opacity);
+    if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash);
     path.classList.add('connection-main');
     group.appendChild(path);
 
     // Only the active link, and only while both ends answer, moves.
-    if (look.animate) {
+    if (stroke.animated) {
       const pathFwd = document.createElementNS("http://www.w3.org/2000/svg", "path");
       pathFwd.setAttribute('d', d);
       pathFwd.setAttribute('fill', 'none');
@@ -1029,6 +1016,8 @@ function drawLines() {
       group.appendChild(pathRev);
     }
 
+    SnmpUI.decorateLink(group, conn, config, () => { saveConfig(); drawLines(); });
+
     // Click handler for selection
     group.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1041,21 +1030,15 @@ function drawLines() {
     svg.appendChild(group);
 
     // Draw link speed/type label if available
-    if (conn.medium || conn.speed) {
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
-
-      let labelParts = [];
-      if (conn.medium) labelParts.push(conn.medium);
-      if (conn.speed) labelParts.push(conn.speed);
-      const labelText = labelParts.join(' ');
+    const labelText = TopologyCanvas.linkLabel(conn);
+    if (labelText) {
+      const box = TopologyCanvas.labelBox(x1, y1, x2, y2, labelText);
 
       const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      const textWidth = labelText.length * 6 + 8;
-      textBg.setAttribute('x', midX - textWidth / 2);
-      textBg.setAttribute('y', midY - 8);
-      textBg.setAttribute('width', textWidth);
-      textBg.setAttribute('height', 16);
+      textBg.setAttribute('x', box.x);
+      textBg.setAttribute('y', box.y);
+      textBg.setAttribute('width', box.width);
+      textBg.setAttribute('height', box.height);
       textBg.setAttribute('rx', 4);
       textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
       textBg.setAttribute('stroke', baseColor);
@@ -1063,8 +1046,8 @@ function drawLines() {
       svg.appendChild(textBg);
 
       const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      text.setAttribute('x', midX);
-      text.setAttribute('y', midY + 4);
+      text.setAttribute('x', box.textX);
+      text.setAttribute('y', box.textY);
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('fill', '#e2e8f0');
       text.setAttribute('font-size', '10');
@@ -1074,6 +1057,7 @@ function drawLines() {
       svg.appendChild(text);
     }
   });
+  CanvasSearch.decorate();
 }
 
 // Get the pixel position of a port on a node
@@ -1094,67 +1078,14 @@ function getPortPosition(nodeEl, port, node) {
     }
   }
 
-  // Fallback: calculate based on node position
-  const nodeW = nodeEl.offsetWidth;
-  const nodeH = nodeEl.offsetHeight;
-
-  // Node center (offsetLeft/Top is already the center due to CSS transform)
-  const nodeX = nodeEl.offsetLeft;
-  const nodeY = nodeEl.offsetTop;
-
-  // Get port index for positioning multiple ports on same side
-  const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
-  const portIndex = samePortSide.findIndex(p => p.id === port?.id);
-  const portCount = samePortSide.length;
-
-  // Calculate offset for multiple ports (spread them out) - match CSS percentages
-  let offsetPercent = 50;
-  if (portCount > 1) {
-    // CSS uses 30%, 50%, 70% for 3 ports
-    const positions = portCount === 2 ? [35, 65] :
-                      portCount === 3 ? [30, 50, 70] :
-                      Array.from({length: portCount}, (_, i) => 20 + (60 * i / (portCount - 1)));
-    offsetPercent = positions[portIndex] || 50;
-  }
-
-  const side = port?.side || 'bottom';
-  switch (side) {
-    case 'top':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY - nodeH / 2 };
-    case 'bottom':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY + nodeH / 2 };
-    case 'left':
-      return { x: nodeX - nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    case 'right':
-      return { x: nodeX + nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    default:
-      return { x: nodeX, y: nodeY };
-  }
+  // Fallback: node box from layout (offsetLeft/Top is the centre due to CSS transform)
+  const box = { x: nodeEl.offsetLeft, y: nodeEl.offsetTop, width: nodeEl.offsetWidth, height: nodeEl.offsetHeight };
+  return TopologyCanvas.portAnchor(box, node.ports || [], port);
 }
 
 // Create a bezier path between two points, considering port sides
 function createBezierPath(x1, y1, x2, y2, sourceSide, targetSide) {
-  const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-  const curvature = Math.min(distance * 0.5, 100);
-
-  let cx1 = x1, cy1 = y1, cx2 = x2, cy2 = y2;
-
-  // Adjust control points based on port sides
-  switch (sourceSide) {
-    case 'top': cy1 = y1 - curvature; break;
-    case 'bottom': cy1 = y1 + curvature; break;
-    case 'left': cx1 = x1 - curvature; break;
-    case 'right': cx1 = x1 + curvature; break;
-  }
-
-  switch (targetSide) {
-    case 'top': cy2 = y2 - curvature; break;
-    case 'bottom': cy2 = y2 + curvature; break;
-    case 'left': cx2 = x2 - curvature; break;
-    case 'right': cx2 = x2 + curvature; break;
-  }
-
-  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+  return TopologyCanvas.bezierPath(x1, y1, x2, y2, sourceSide, targetSide);
 }
 
 // ============================================
@@ -1669,7 +1600,7 @@ function renderHostList(nodes) {
     const statusColor = view.text;
 
     html += `
-      <div class="host-row" data-node-id="${node.id}">
+      <div class="host-row" data-node-id="${node.id}"${node.probeDetail ? ` title="${escapeHtml(node.probeDetail)}"` : ''}>
         <div class="flex items-center">
           <div class="status-dot ${colorClass}"></div>
           <div class="flex flex-col">
@@ -1702,26 +1633,8 @@ function applyNodeFilter() {
   // Get nodes from monitoring data if active, otherwise from config
   const sourceNodes = monitoringActive && networkData.length ? networkData : config.nodes;
 
-  // Filter nodes
-  const filteredNodes = sourceNodes.filter(node => {
-    // Search filter (name or address)
-    const matchesSearch = !searchTerm ||
-      (node.name && node.name.toLowerCase().includes(searchTerm)) ||
-      (node.address && node.address.toLowerCase().includes(searchTerm));
-
-    // Status filter
-    let matchesStatus = true;
-    const state = Probe.canonicalStatus(node.status);
-    if (statusFilter === 'online') {
-      matchesStatus = state === 'up';
-    } else if (statusFilter === 'offline') {
-      matchesStatus = state === 'down';
-    } else if (statusFilter === 'unknown') {
-      matchesStatus = state === 'unknown';
-    }
-
-    return matchesSearch && matchesStatus;
-  });
+  // Filter nodes (query syntax in search.js); also highlights the canvas.
+  const filteredNodes = CanvasSearch.filter(sourceNodes);
 
   // Update host list with filtered nodes
   renderHostList(filteredNodes);
@@ -1733,31 +1646,6 @@ function applyNodeFilter() {
   } else {
     countEl.innerText = sourceNodes.length;
   }
-
-  // Highlight matching nodes in viewport
-  highlightFilteredNodes(filteredNodes.map(n => n.id));
-}
-
-function highlightFilteredNodes(matchingIds) {
-  const searchTerm = document.getElementById('node-search').value.trim();
-  const statusFilter = document.getElementById('node-filter-status').value;
-  const isFiltering = searchTerm || statusFilter !== 'all';
-
-  document.querySelectorAll('.node-container').forEach(el => {
-    const nodeId = el.id.replace('node-', '');
-    if (isFiltering) {
-      if (matchingIds.includes(nodeId)) {
-        el.style.opacity = '1';
-        el.style.filter = 'none';
-      } else {
-        el.style.opacity = '0.3';
-        el.style.filter = 'grayscale(50%)';
-      }
-    } else {
-      el.style.opacity = '1';
-      el.style.filter = 'none';
-    }
-  });
 }
 
 function focusOnNode(nodeId) {
@@ -1857,6 +1745,7 @@ function showNodeContextMenu(e, node) {
     addToContainerItems.innerHTML = '';
   }
 
+  QuickActions.prepareMenu(node);
   menu.classList.remove('hidden');
   lucide.createIcons();
 }
@@ -1881,15 +1770,43 @@ function editNodeFromContext() {
 }
 
 async function pingNodeFromContext() {
-  if (!contextMenuNode || !window.electronAPI) return;
+  if (!contextMenuNode || !window.desktopAPI) return;
   hideContextMenu();
 
-  const result = await window.electronAPI.network.ping(contextMenuNode.address);
+  const result = await window.desktopAPI.network.ping(contextMenuNode.address);
   if (result.success) {
     toastSuccess('Ping Successful', `${contextMenuNode.address} responded in ${result.duration}ms`);
   } else {
     toastError('Ping Failed', `${contextMenuNode.address} did not respond (${result.duration}ms)`);
   }
+}
+
+function copyAddressFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.copyAddress(node);
+}
+
+function openWebFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.openWeb(node);
+}
+
+function tracerouteFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.traceroute(node);
+}
+
+function wakeFromContext() {
+  const node = contextMenuNode;
+  if (!node) return;
+  hideContextMenu();
+  QuickActions.wake(node);
 }
 
 function showStatusHistoryFromContext() {
@@ -2028,12 +1945,12 @@ function toggleSSHAuthFields() {
 }
 
 async function browseSSHKey() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Not Available', 'File browsing is only available in the desktop application');
     return;
   }
 
-  const result = await window.electronAPI.ssh.browseKey();
+  const result = await window.desktopAPI.ssh.browseKey();
   if (result.success) {
     document.getElementById('ssh-key-path').value = result.path;
     toastInfo('Key Selected', `Selected: ${result.path.split(/[\\/]/).pop()}`);
@@ -2068,7 +1985,7 @@ async function rememberSecret(nodeId, changes) {
 }
 
 async function connectSSH() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('SSH Unavailable', 'SSH is only available in the desktop application');
     return;
   }
@@ -2128,7 +2045,11 @@ async function connectSSH() {
   document.getElementById('terminal-status').textContent = 'Connecting...';
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
-  const result = await window.electronAPI.ssh.connect(connectionInfo);
+  let result = await window.desktopAPI.ssh.connect(connectionInfo);
+  if (!result.success && result.hostKey && result.hostKey.status === 'unknown' && confirmUnknownHostKey(result.hostKey)) {
+    connectionInfo.acceptHostKey = result.hostKey.fingerprint;
+    result = await window.desktopAPI.ssh.connect(connectionInfo);
+  }
 
   if (result.success) {
     document.getElementById('terminal-status').textContent = 'Connected';
@@ -2139,6 +2060,40 @@ async function connectSSH() {
     document.getElementById('terminal-status').textContent = 'Failed';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-red-600';
     toastError('SSH Connection Failed', result.error);
+    if (result.hostKey && result.hostKey.status === 'mismatch') {
+      await offerToForgetHostKey(result.hostKey);
+    }
+  }
+}
+
+// The fingerprint is shown in full so the user can compare it with the server
+// (for example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+function confirmUnknownHostKey(hostKey) {
+  return window.confirm(
+    `First connection to ${hostKey.host}:${hostKey.port}.\n\n` +
+    `The server presented this host key:\n` +
+    `${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
+    `Only continue if this fingerprint matches the server's.\n` +
+    `OK: trust and remember this key, then connect.\nCancel: do not connect.`
+  );
+}
+
+async function offerToForgetHostKey(hostKey) {
+  const forget = window.confirm(
+    `HOST KEY MISMATCH for ${hostKey.host}:${hostKey.port}.\n\n` +
+    `Stored key:\n${hostKey.storedAlgorithm}\n${hostKey.storedFingerprint}\n\n` +
+    `Presented key:\n${hostKey.algorithm}\n${hostKey.fingerprint}\n\n` +
+    `Someone may be intercepting the connection. Only forget the stored key ` +
+    `if you know the server's key changed (reinstall, new key).\n\n` +
+    `OK: forget the stored key (you will be asked to verify the new one on the next connection).\n` +
+    `Cancel: keep the stored key.`
+  );
+  if (!forget) return;
+  const removed = await window.desktopAPI.ssh.forgetHostKey(hostKey.host, hostKey.port);
+  if (removed && removed.success) {
+    toastSuccess('Host key forgotten', `Connect again to verify the new key of ${hostKey.host}`);
+  } else {
+    toastError('Host key not forgotten', (removed && removed.error) || 'The stored host key was not removed');
   }
 }
 
@@ -2184,11 +2139,11 @@ function createTerminalTab(nodeId, host) {
 }
 
 function sendTerminalSize(nodeId, term) {
-  if (!window.electronAPI || !term) return;
+  if (!window.desktopAPI || !term) return;
   const cols = term.cols;
   const rows = term.rows;
   if (!Number.isInteger(cols) || !Number.isInteger(rows)) return;
-  window.electronAPI.ssh.resize(nodeId, cols, rows);
+  window.desktopAPI.ssh.resize(nodeId, cols, rows);
 }
 
 async function initTerminal(nodeId, container) {
@@ -2205,15 +2160,15 @@ async function initTerminal(nodeId, container) {
       background: '#1a1a2e',
       foreground: '#e2e8f0',
       cursor: '#3b82f6',
-      selection: 'rgba(59, 130, 246, 0.3)'
+      selectionBackground: 'rgba(59, 130, 246, 0.3)'
     }
   });
 
   term.open(container);
 
   term.onData(data => {
-    if (window.electronAPI) {
-      window.electronAPI.ssh.write(nodeId, data);
+    if (window.desktopAPI) {
+      window.desktopAPI.ssh.write(nodeId, data);
     }
   });
 
@@ -2263,8 +2218,8 @@ async function closeTerminalTab(nodeId) {
   if (termData && termData.term) {
     termData.term.dispose();
   }
-  if (window.electronAPI) {
-    await window.electronAPI.ssh.disconnect(nodeId);
+  if (window.desktopAPI) {
+    await window.desktopAPI.ssh.disconnect(nodeId);
   }
 
   if (tab) tab.remove();
@@ -2286,16 +2241,16 @@ async function closeTerminalTab(nodeId) {
 
 // SSH data listener
 function setupSSHListeners() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
-  window.electronAPI.ssh.onData(({ nodeId, data }) => {
+  window.desktopAPI.ssh.onData(({ nodeId, data }) => {
     const termData = terminals.get(nodeId);
     if (termData && termData.term) {
       termData.term.write(data);
     }
   });
 
-  window.electronAPI.ssh.onClosed(({ nodeId }) => {
+  window.desktopAPI.ssh.onClosed(({ nodeId }) => {
     closeTerminalTab(nodeId);
   });
 }
@@ -2327,9 +2282,11 @@ function openNodeModal(node = null) {
   const sshAuth = node && (node.sshAuth === 'key' || secretType === 'passphrase') ? 'key' : 'password';
   document.getElementById('node-ssh-auth').value = sshAuth;
   document.getElementById('node-ssh-key-path').value = node && node.sshKeyPath ? node.sshKeyPath : '';
+  QuickActions.fillNodeForm(node);
   nodeSecretClear = false;
   refreshNodeSecretHint(node);
   toggleNodeSshAuth();
+  SnmpUI.fillForm(node);
   const cable = node ? Topology.primaryCable(config, node.id) : null;
   document.getElementById('node-link-type').value = cable ? (cable.medium || '') : '';
   document.getElementById('node-link-speed').value = cable ? (cable.speed || '') : '';
@@ -2662,11 +2619,11 @@ function clearNodeSecretField() {
 }
 
 async function browseNodeSshKey() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Not Available', 'File browsing is only available in the desktop application');
     return;
   }
-  const result = await window.electronAPI.ssh.browseKey();
+  const result = await window.desktopAPI.ssh.browseKey();
   if (result && result.success) {
     document.getElementById('node-ssh-key-path').value = result.path;
   }
@@ -2675,7 +2632,9 @@ async function browseNodeSshKey() {
 async function saveNode() {
   const id = document.getElementById('node-edit-id').value;
   const name = document.getElementById('node-name').value.trim();
-  const address = document.getElementById('node-address').value.trim();
+  // `[::1]` is stored as `::1`; validateNodeForm rejects anything else invalid.
+  const typedAddress = document.getElementById('node-address').value.trim();
+  const address = (typedAddress && Hosts.normalizeHost(typedAddress)) || typedAddress;
   const port = document.getElementById('node-port').value.trim();
   const iconType = document.getElementById('node-icon-type').value;
   const icon = document.getElementById('node-icon').value;
@@ -2697,6 +2656,8 @@ async function saveNode() {
   const zoneId = document.getElementById('node-zone')?.value || null;
 
   if (!validateNodeForm()) return;
+  const actionFields = QuickActions.readNodeForm();
+  if (!actionFields) return;
 
   const newNodeId = id || 'node_' + Date.now();
 
@@ -2734,10 +2695,12 @@ async function saveNode() {
   delete nodeData.uptime;
   delete nodeData.level;
   delete nodeData.responseTime;
+  delete nodeData.probeDetail;
   delete nodeData.sshPass;
   delete nodeData.sshPassphrase;
   delete nodeData._encrypted;
   delete nodeData.sshSecretClear;
+  QuickActions.applyNodeFields(nodeData, actionFields);
   if (sshKeyPath) nodeData.sshKeyPath = sshKeyPath;
   else delete nodeData.sshKeyPath;
   if (nodeSecretClear) {
@@ -2747,6 +2710,11 @@ async function saveNode() {
     nodeData.sshPassphrase = typedPassphrase;
   } else if (sshAuth !== 'key' && typedPassword) {
     nodeData.sshPass = typedPassword;
+  }
+  const snmpError = SnmpUI.readForm(nodeData);
+  if (snmpError) {
+    toastError('Validation Error', snmpError);
+    return;
   }
   if (!previous) nodeData.expanded = true;
 
@@ -2802,15 +2770,23 @@ async function saveNode() {
 
 let discoveredHosts = [];
 let networkInterfaces = []; // Store interfaces for reference
+let discoveryGeneration = 0; // ignores enrichment results from an older scan
 
 async function openDiscoveryModal() {
-  if (!window.electronAPI) {
+  if (!window.desktopAPI) {
     toastWarning('Discovery Unavailable', 'Network discovery is only available in the desktop application');
     return;
   }
 
   // Get network interfaces
-  networkInterfaces = await window.electronAPI.network.getLocalInfo();
+  // The range scan is IPv4 only; IPv6 entries (family "IPv6") are skipped
+  // here. IPv6 hosts come from the neighbour table after the scan.
+  const localInfo = await window.desktopAPI.network.getLocalInfo();
+  networkInterfaces = (Array.isArray(localInfo) ? localInfo : []).filter((iface) =>
+    iface.family !== 'IPv6' &&
+    // A /32 has no neighbours to scan (WSL puts 10.255.255.254/32 on lo).
+    iface.netmask !== '255.255.255.255' &&
+    iface.interface !== 'lo');
   const select = document.getElementById('discovery-interface');
   select.innerHTML = '';
 
@@ -2872,7 +2848,7 @@ function updateDiscoveryRange() {
 }
 
 async function startNetworkScan() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
   const baseIp = document.getElementById('discovery-base').value.trim();
   const startRange = parseInt(document.getElementById('discovery-start').value, 10);
@@ -2888,6 +2864,7 @@ async function startNetworkScan() {
   }
 
   discoveredHosts = [];
+  discoveryGeneration += 1;
   document.getElementById('discovery-status').classList.remove('hidden');
   document.getElementById('discovery-results').classList.add('hidden');
   document.getElementById('btn-start-scan').classList.add('hidden');
@@ -2895,7 +2872,7 @@ async function startNetworkScan() {
   document.getElementById('discovery-text').textContent = 'Scanning...';
 
   // Listen for progress updates
-  const removeProgressListener = window.electronAPI.network.onScanProgress((progress) => {
+  const removeProgressListener = window.desktopAPI.network.onScanProgress((progress) => {
     const percent = Math.round((progress.current / progress.total) * 100);
     document.getElementById('discovery-progress-bar').style.width = percent + '%';
     document.getElementById('discovery-text').textContent = `Scanning... ${progress.current}/${progress.total} (Found: ${progress.found})`;
@@ -2903,7 +2880,7 @@ async function startNetworkScan() {
 
   let results;
   try {
-    results = await window.electronAPI.network.scan(baseIp, startRange, endRange);
+    results = await window.desktopAPI.network.scan(baseIp, startRange, endRange);
   } catch (error) {
     removeProgressListener();
     document.getElementById('btn-start-scan').classList.remove('hidden');
@@ -2915,7 +2892,7 @@ async function startNetworkScan() {
   removeProgressListener();
 
   // Also get ARP table for MAC addresses
-  const arpTable = await window.electronAPI.network.arp();
+  const arpTable = await window.desktopAPI.network.arp();
 
   // Merge results
   discoveredHosts = results.map(r => {
@@ -2927,9 +2904,23 @@ async function startNetworkScan() {
     };
   });
 
+  // IPv6 hosts: a subnet sweep is not feasible, so read the neighbour table.
+  // They start unselected (link-local entries are often duplicates of an
+  // IPv4 host already found).
+  let neighbors = [];
+  try {
+    neighbors = window.desktopAPI.network.neighbors ? await window.desktopAPI.network.neighbors() : [];
+  } catch (error) {
+    neighbors = [];
+  }
+  (Array.isArray(neighbors) ? neighbors : []).forEach((entry) => {
+    if (!entry || !Hosts.isIpv6(entry.ip)) return;
+    discoveredHosts.push({ ip: entry.ip, mac: entry.mac || null, selected: false, ipv6: true });
+  });
+
   // Filter out already configured hosts
-  const configuredIps = config.nodes.map(n => n.address);
-  discoveredHosts = discoveredHosts.filter(h => !configuredIps.includes(h.ip));
+  discoveredHosts = Discovery.newHosts(discoveredHosts, config.nodes)
+    .map((host) => Object.assign({ hostname: null, vendor: null, name: '', nameEdited: false }, host));
 
   document.getElementById('discovery-text').textContent = `Found ${discoveredHosts.length} new hosts`;
   document.getElementById('discovery-progress-bar').style.width = '100%';
@@ -2942,47 +2933,111 @@ async function startNetworkScan() {
   }
   document.getElementById('btn-start-scan').classList.remove('hidden');
   document.getElementById('btn-start-scan').textContent = 'Scan Again';
+
+  enrichDiscoveredHosts();
+}
+
+// Reverse DNS names and MAC vendors arrive after the scan, row by row.
+async function enrichDiscoveredHosts() {
+  const api = window.desktopAPI && window.desktopAPI.network;
+  if (!api || !api.enrich || discoveredHosts.length === 0) return;
+  const generation = discoveryGeneration;
+  const apply = (ip, info) => {
+    if (generation !== discoveryGeneration || !info) return;
+    const idx = discoveredHosts.findIndex((host) => host.ip === ip);
+    if (idx === -1) return;
+    const host = discoveredHosts[idx];
+    host.hostname = info.hostname || host.hostname || null;
+    host.vendor = info.vendor || host.vendor || null;
+    updateDiscoveryRow(idx);
+  };
+  const stop = api.onEnrichResult ? api.onEnrichResult((result) => result && apply(result.ip, result)) : () => {};
+  try {
+    const results = await api.enrich(discoveredHosts.map((host) => ({ ip: host.ip, mac: host.mac || null })));
+    Object.keys(results || {}).forEach((ip) => apply(ip, results[ip]));
+  } catch (error) {
+    console.warn('Discovery enrichment failed', error);
+  } finally {
+    stop();
+  }
 }
 
 function renderDiscoveryResults() {
   const container = document.getElementById('discovery-results');
   container.innerHTML = '';
   container.classList.remove('hidden');
+  if (discoveredHosts.length === 0) return;
 
+  const table = document.createElement('table');
+  table.className = 'discovery-table';
+  table.innerHTML = '<thead><tr><th></th><th>Address</th><th>Hostname</th><th>Vendor</th><th>MAC</th><th>Node name</th></tr></thead>';
+  const body = document.createElement('tbody');
   discoveredHosts.forEach((host, idx) => {
-    const div = document.createElement('div');
-    div.className = 'discovered-host';
-    div.innerHTML = `
-      <div>
-        <input type="checkbox" ${host.selected ? 'checked' : ''} onchange="discoveredHosts[${idx}].selected = this.checked" class="mr-2">
-        <span class="font-mono text-sm">${host.ip}</span>
-        ${host.mac ? `<span class="text-xs text-slate-500 ml-2">${host.mac}</span>` : ''}
-      </div>
+    const row = document.createElement('tr');
+    row.dataset.idx = String(idx);
+    row.innerHTML = `
+      <td><input type="checkbox" class="discovery-select" ${host.selected ? 'checked' : ''}></td>
+      <td class="font-mono">${escapeHtml(host.ip)}${host.ipv6 ? ' <span class="text-slate-500">IPv6</span>' : ''}</td>
+      <td class="discovery-hostname text-slate-400"></td>
+      <td class="discovery-vendor text-slate-400"></td>
+      <td class="font-mono text-slate-500">${host.mac ? escapeHtml(host.mac) : ''}</td>
+      <td><input type="text" class="form-input discovery-name" maxlength="64"></td>
     `;
-    container.appendChild(div);
+    row.querySelector('.discovery-select').addEventListener('change', (event) => {
+      host.selected = event.target.checked;
+    });
+    row.querySelector('.discovery-name').addEventListener('input', (event) => {
+      host.name = event.target.value;
+      host.nameEdited = true;
+    });
+    body.appendChild(row);
   });
+  table.appendChild(body);
+  container.appendChild(table);
+  discoveredHosts.forEach((host, idx) => updateDiscoveryRow(idx));
+}
+
+// Refreshes the hostname, vendor and suggested name cells of one row.
+function updateDiscoveryRow(idx) {
+  const host = discoveredHosts[idx];
+  const row = document.querySelector(`#discovery-results tr[data-idx="${idx}"]`);
+  if (!host || !row) return;
+  row.querySelector('.discovery-hostname').textContent = host.hostname || '';
+  row.querySelector('.discovery-vendor').textContent = host.vendor || '';
+  if (!host.nameEdited) {
+    host.name = Discovery.suggestName(host);
+    row.querySelector('.discovery-name').value = host.name;
+  }
+}
+
+// The canvas point (percent units) at the centre of the visible viewport.
+function viewportCenterPercent() {
+  const rect = viewport.getBoundingClientRect();
+  const worldX = (rect.width / 2 - pointX) / scale;
+  const worldY = (rect.height / 2 - pointY) / scale;
+  return { x: (worldX / window.innerWidth) * 100, y: (worldY / window.innerHeight) * 100 };
 }
 
 async function addDiscoveredNodes() {
   const selected = discoveredHosts.filter(h => h.selected);
-  const startCount = config.nodes.length;
+  const fields = Discovery.nodesForHosts(selected, config.nodes, viewportCenterPercent());
+  const stamp = Date.now();
 
-  selected.forEach((host, idx) => {
-    const col = (startCount + idx) % 10;
-    const row = Math.floor((startCount + idx) / 10);
-
-    config.nodes.push(Topology.createNode({
-      id: 'node_' + Date.now() + '_' + idx,
-      name: `Device ${host.ip}`,
-      address: host.ip,
-      icon: 'circle',
-      iconType: 'lucide',
-      x: (col * 10) + 5,
-      y: (row * 15) + 10
-    }));
+  fields.forEach((field, idx) => {
+    const node = Topology.createNode(Object.assign({ id: 'node_' + stamp + '_' + idx }, field));
+    if (field.mac) node.mac = field.mac;
+    config.nodes.push(node);
   });
 
-  saveConfig();
+  const saved = await saveConfig();
+  if (saved && saved.success === false) {
+    toastError('Save failed', saved.error || 'The topology could not be saved');
+  } else if (fields.length > 0) {
+    toastSuccess('Devices added', `${fields.length} node${fields.length === 1 ? '' : 's'} added to the canvas`);
+  }
+  if (selected.length > fields.length) {
+    toastInfo('Skipped', `${selected.length - fields.length} address${selected.length - fields.length === 1 ? ' is' : 'es are'} already on the canvas`);
+  }
   closeModal('discovery-modal');
 
   // Restart monitoring with new nodes if it was active
@@ -3020,174 +3075,21 @@ function updateSnapButton() {
 // ============================================
 
 async function exportTopologyAsImage() {
-  toastInfo('Exporting...', 'Preparing topology image');
-
-  // Get the world element containing all nodes and connections
-  const worldEl = document.getElementById('world');
-  const svgEl = document.getElementById('connections-layer');
-
-  if (!worldEl || config.nodes.length === 0) {
-    toastError('Export Failed', 'No topology to export');
-    return;
-  }
-
-  // Calculate bounds of all nodes
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  config.nodes.forEach(node => {
-    const x = (node.x / 100) * 10000;
-    const y = (node.y / 100) * 10000;
-    minX = Math.min(minX, x - 60);
-    minY = Math.min(minY, y - 60);
-    maxX = Math.max(maxX, x + 60);
-    maxY = Math.max(maxY, y + 60);
+  const nodes = config.nodes.length ? displayedNodes() : [];
+  const statusById = new Map(nodes.map((n) => [n.id, n.status]));
+  const typeLabels = { proxmox: 'Proxmox', docker: 'Docker', kubernetes: 'K8s', vmware: 'VMware', rack: 'Rack', cloud: 'Cloud', custom: 'Container' };
+  await TopologyExport.exportImage({
+    document,
+    nodes,
+    statusView,
+    statusLabel: (node, view) => statusLabel(node, statusById, view),
+    containerTypeLabel: (type) => typeLabels[type] || 'Container',
+    gridCell: (node) => { const cell = getGridCell(node.x || 50, node.y || 50); return cell.col + cell.row; },
+    toast: { success: toastSuccess, error: toastError },
+    save: window.desktopAPI && window.desktopAPI.image
+      ? (format, data, fileName) => window.desktopAPI.image.export(format, data, fileName)
+      : null
   });
-
-  const padding = 50;
-  const width = maxX - minX + padding * 2;
-  const height = maxY - minY + padding * 2;
-
-  // Create canvas
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-
-  // Fill background
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(0, 0, width, height);
-
-  // Draw grid (optional)
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-  ctx.lineWidth = 1;
-  const gridSize = 100;
-  for (let x = 0; x < width; x += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = 0; y < height; y += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-
-  // Draw connections
-  (config.links || []).forEach(conn => {
-    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
-    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
-    if (!sourceNode || !targetNode) return;
-
-    const x1 = (sourceNode.x / 100) * 10000 - minX + padding;
-    const y1 = (sourceNode.y / 100) * 10000 - minY + padding;
-    const x2 = (targetNode.x / 100) * 10000 - minX + padding;
-    const y2 = (targetNode.y / 100) * 10000 - minY + padding;
-
-    // Get status for color
-    const look = linkAppearance(conn, displayedNodes());
-    const color = look.color;
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = look.waiting ? 0.35 : 0.75;
-
-    // Draw bezier curve
-    ctx.beginPath();
-    const midX = (x1 + x2) / 2;
-    const midY = (y1 + y2) / 2;
-    const cpY = Math.min(y1, y2) - 50;
-    ctx.moveTo(x1, y1);
-    ctx.quadraticCurveTo(midX, cpY, x2, y2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    // Draw link label if available
-    if (conn.medium || conn.speed) {
-      const labelX = midX;
-      const labelY = (y1 + y2) / 2 - 10;
-      const labelText = [conn.medium, conn.speed].filter(Boolean).join(' ');
-
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-      const textWidth = ctx.measureText(labelText).width + 10;
-      ctx.fillRect(labelX - textWidth / 2, labelY - 8, textWidth, 16);
-
-      ctx.fillStyle = '#e2e8f0';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(labelText, labelX, labelY + 4);
-    }
-  });
-
-  // Draw nodes
-  config.nodes.forEach(node => {
-    const x = (node.x / 100) * 10000 - minX + padding;
-    const y = (node.y / 100) * 10000 - minY + padding;
-
-    // Get status
-    const nodeData = networkData.find(n => n.id === node.id) || node;
-    const view = statusView(nodeData.status);
-
-    // Node background
-    const gradient = ctx.createLinearGradient(x - 50, y - 50, x + 50, y + 50);
-    gradient.addColorStop(0, 'rgba(30, 41, 59, 0.95)');
-    gradient.addColorStop(1, 'rgba(15, 23, 42, 0.95)');
-    ctx.fillStyle = gradient;
-
-    // Rounded rectangle
-    const w = 100, h = 100, r = 12;
-    ctx.beginPath();
-    ctx.moveTo(x - w/2 + r, y - h/2);
-    ctx.lineTo(x + w/2 - r, y - h/2);
-    ctx.quadraticCurveTo(x + w/2, y - h/2, x + w/2, y - h/2 + r);
-    ctx.lineTo(x + w/2, y + h/2 - r);
-    ctx.quadraticCurveTo(x + w/2, y + h/2, x + w/2 - r, y + h/2);
-    ctx.lineTo(x - w/2 + r, y + h/2);
-    ctx.quadraticCurveTo(x - w/2, y + h/2, x - w/2, y + h/2 - r);
-    ctx.lineTo(x - w/2, y - h/2 + r);
-    ctx.quadraticCurveTo(x - w/2, y - h/2, x - w/2 + r, y - h/2);
-    ctx.closePath();
-    ctx.fill();
-
-    // Border
-    ctx.strokeStyle = view.state === 'up'
-      ? 'rgba(34, 197, 94, 0.5)'
-      : view.state === 'down'
-        ? 'rgba(239, 68, 68, 0.5)'
-        : 'rgba(148, 163, 184, 0.45)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Status indicator
-    ctx.fillStyle = view.state === 'up' ? '#22c55e' : view.state === 'down' ? '#ef4444' : '#94a3b8';
-    ctx.beginPath();
-    ctx.arc(x + 40, y - 40, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Node name
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(node.name || 'Unknown', x, y + 30);
-
-    // Node address
-    ctx.fillStyle = '#64748b';
-    ctx.font = '9px monospace';
-    ctx.fillText(node.address || '', x, y + 42);
-  });
-
-  // Convert to blob and download
-  canvas.toBlob((blob) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `topology-${new Date().toISOString().slice(0, 10)}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toastSuccess('Export Complete', 'Topology image saved');
-  }, 'image/png');
 }
 
 // ============================================
@@ -3203,93 +3105,18 @@ function autoLayoutNodes() {
   // Save state for undo
   saveStateForUndo('Auto-layout nodes');
 
-  // Build adjacency map from connections
-  const connections = config.links || [];
-  const adjacency = new Map();
-
+  const layout = TopologyCanvas.autoLayout(config.nodes, config.links);
   config.nodes.forEach(node => {
-    adjacency.set(node.id, new Set());
-  });
-
-  connections.forEach(conn => {
-    if (adjacency.has(conn.sourceNodeId) && adjacency.has(conn.targetNodeId)) {
-      adjacency.get(conn.sourceNodeId).add(conn.targetNodeId);
-      adjacency.get(conn.targetNodeId).add(conn.sourceNodeId);
+    const position = layout.positions.get(node.id);
+    if (position) {
+      node.x = position.x;
+      node.y = position.y;
     }
-  });
-
-  // Find root nodes (nodes with no incoming connections or most connections)
-  let rootNodes = config.nodes.filter(node => {
-    const incoming = connections.filter(c => c.targetNodeId === node.id).length;
-    return incoming === 0;
-  });
-
-  if (rootNodes.length === 0) {
-    // No clear root, use the node with most connections
-    rootNodes = [config.nodes.reduce((best, node) => {
-      const conns = adjacency.get(node.id)?.size || 0;
-      const bestConns = adjacency.get(best.id)?.size || 0;
-      return conns > bestConns ? node : best;
-    }, config.nodes[0])];
-  }
-
-  // BFS to assign levels
-  const levels = new Map();
-  const visited = new Set();
-  let queue = rootNodes.map(n => ({ id: n.id, level: 0 }));
-
-  while (queue.length > 0) {
-    const { id, level } = queue.shift();
-    if (visited.has(id)) continue;
-    visited.add(id);
-    levels.set(id, level);
-
-    const neighbors = adjacency.get(id) || new Set();
-    neighbors.forEach(neighborId => {
-      if (!visited.has(neighborId)) {
-        queue.push({ id: neighborId, level: level + 1 });
-      }
-    });
-  }
-
-  // Handle disconnected nodes
-  config.nodes.forEach(node => {
-    if (!levels.has(node.id)) {
-      levels.set(node.id, 0);
-    }
-  });
-
-  // Group nodes by level
-  const nodesByLevel = new Map();
-  levels.forEach((level, nodeId) => {
-    if (!nodesByLevel.has(level)) {
-      nodesByLevel.set(level, []);
-    }
-    nodesByLevel.get(level).push(nodeId);
-  });
-
-  // Position nodes
-  const levelSpacing = 15; // vertical spacing in %
-  const startY = 10;
-  const startX = 50; // center
-
-  nodesByLevel.forEach((nodeIds, level) => {
-    const count = nodeIds.length;
-    const totalWidth = count * 12; // spacing between nodes in %
-    const startXForLevel = startX - totalWidth / 2 + 6;
-
-    nodeIds.forEach((nodeId, idx) => {
-      const node = config.nodes.find(n => n.id === nodeId);
-      if (node) {
-        node.x = Math.max(5, Math.min(95, startXForLevel + idx * 12));
-        node.y = Math.max(5, Math.min(95, startY + level * levelSpacing));
-      }
-    });
   });
 
   saveConfig();
   renderTree(config.nodes);
-  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${nodesByLevel.size} levels`);
+  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${layout.levelCount} levels`);
 }
 
 // ============================================
@@ -3297,9 +3124,9 @@ function autoLayoutNodes() {
 // ============================================
 
 function setupMonitoringListener() {
-  if (!window.electronAPI) return;
+  if (!window.desktopAPI) return;
 
-  window.electronAPI.monitor.onStatus((data) => {
+  window.desktopAPI.monitor.onStatus((data) => {
     if (!data || !Array.isArray(data.nodes)) return;
     const updated = document.getElementById('last-updated');
     if (updated) updated.textContent = 'Last Update: ' + (data.updated || '');
@@ -3311,6 +3138,7 @@ function setupMonitoringListener() {
       const copy = Object.assign({}, configNode);
       copy.status = entry ? entry.status : 'unknown';
       copy.responseTime = entry && entry.responseTime != null ? entry.responseTime : null;
+      copy.probeDetail = entry && typeof entry.detail === 'string' ? entry.detail : '';
       delete copy.activeParentId;
       const secretType = Topology.secretType(copy);
       if (secretType) copy.sshSecret = { type: secretType };
@@ -3331,33 +3159,38 @@ function setupMonitoringListener() {
       return copy;
     });
 
+    if (window.AlertNotifier) window.AlertNotifier.observe(networkData, config.settings);
     renderTree(networkData);
     renderHostList(networkData);
   });
 }
 
 async function startMonitoring() {
-  if (!window.electronAPI || monitoringActive) return;
+  if (!window.desktopAPI || monitoringActive) return;
 
   const settings = config.settings || {};
-  await window.electronAPI.monitor.start({
+  if (window.AlertNotifier) window.AlertNotifier.reset();
+  await window.desktopAPI.monitor.start({
     nodes: (config.nodes || []).map((node) => ({
       id: node.id,
       address: typeof node.address === 'string' ? node.address : '',
-      port: node.port == null || node.port === '' ? null : node.port
+      port: node.port == null || node.port === '' ? null : node.port,
+      probe: node.probe || null
     })),
     interval: Probe.monitoringInterval(settings.probeIntervalMs),
     confirmations: Probe.confirmationCount(settings.confirmations)
   });
+  SnmpUI.start(config);
 
   monitoringActive = true;
   document.getElementById('btn-monitoring').classList.add('active');
 }
 
 async function stopMonitoring() {
-  if (!window.electronAPI || !monitoringActive) return;
+  if (!window.desktopAPI || !monitoringActive) return;
 
-  await window.electronAPI.monitor.stop();
+  await window.desktopAPI.monitor.stop();
+  SnmpUI.stop();
   monitoringActive = false;
   document.getElementById('btn-monitoring').classList.remove('active');
 }
@@ -3527,22 +3360,10 @@ function toastInfo(title, message) { return showToast('info', title, message); }
 // Input Validation
 // ============================================
 
-function isValidIP(ip) {
-  if (!ip) return false;
-  const parts = ip.split('.');
-  if (parts.length !== 4) return false;
-  return parts.every(part => {
-    const num = parseInt(part, 10);
-    return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
-  });
-}
-
+// IPv4, IPv6 (optionally `[bracketed]`, or `fe80::1%eth0` on link-local), or
+// a hostname. Same rules as the backend (renderer/js/hosts.js).
 function isValidHostname(hostname) {
-  if (!hostname) return false;
-  // Allow IP addresses and valid hostnames
-  if (isValidIP(hostname)) return true;
-  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-  return hostnameRegex.test(hostname);
+  return !!hostname && Hosts.normalizeHost(hostname) !== null;
 }
 
 function isValidPort(port) {
@@ -3563,7 +3384,7 @@ function validateNodeForm() {
   }
 
   if (address && !isValidHostname(address)) {
-    toastError('Validation Error', 'Invalid IP address or hostname');
+    toastError('Validation Error', 'Invalid IPv4/IPv6 address or hostname');
     document.getElementById('node-address').focus();
     return false;
   }
@@ -3680,15 +3501,8 @@ function highlightNodesInRect(rectX, rectY, rectW, rectH) {
     const node = config.nodes.find(n => n.id === nodeId);
     if (!node) return;
 
-    // Calculate node position in world pixels
-    const worldWidth = window.innerWidth;
-    const worldHeight = window.innerHeight;
-    const nodeX = (node.x / 100) * worldWidth;
-    const nodeY = (node.y / 100) * worldHeight;
-
-    // Check if node is inside rect
-    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
-                     nodeY >= rectY && nodeY <= rectY + rectH;
+    const rect = { x: rectX, y: rectY, width: rectW, height: rectH };
+    const isInside = TopologyCanvas.nodeInRect(node, rect, window.innerWidth, window.innerHeight);
 
     if (isInside) {
       el.classList.add('selected');
@@ -3699,20 +3513,9 @@ function highlightNodesInRect(rectX, rectY, rectW, rectH) {
 }
 
 function selectNodesInRect(rectX, rectY, rectW, rectH) {
-  const worldWidth = window.innerWidth;
-  const worldHeight = window.innerHeight;
-
-  config.nodes.forEach(node => {
-    const nodeX = (node.x / 100) * worldWidth;
-    const nodeY = (node.y / 100) * worldHeight;
-
-    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
-                     nodeY >= rectY && nodeY <= rectY + rectH;
-
-    if (isInside) {
-      selectedNodes.add(node.id);
-    }
-  });
+  const rect = { x: rectX, y: rectY, width: rectW, height: rectH };
+  TopologyCanvas.nodesInRect(config.nodes, rect, window.innerWidth, window.innerHeight)
+    .forEach(id => selectedNodes.add(id));
 
   updateSelectionVisuals();
 
@@ -3881,13 +3684,13 @@ function initMinimap() {
     const worldWidth = window.innerWidth * 3; // 300% of viewport
     const worldHeight = window.innerHeight * 3;
 
-    const worldX = (clickX / minimapWidth) * worldWidth;
-    const worldY = (clickY / minimapHeight) * worldHeight;
+    const target = TopologyCanvas.minimapToWorld(clickX, clickY, minimapWidth, minimapHeight, worldWidth, worldHeight);
 
     // Center viewport on this position
     const viewportRect = viewport.getBoundingClientRect();
-    pointX = viewportRect.width / 2 - worldX * scale;
-    pointY = viewportRect.height / 2 - worldY * scale;
+    const centred = TopologyCanvas.centerOn(target.x, target.y, viewportRect.width, viewportRect.height, scale);
+    pointX = centred.pointX;
+    pointY = centred.pointY;
 
     updateTransform();
     updateMinimap();
@@ -3925,80 +3728,37 @@ function updateMinimap() {
   canvas.width = minimapWidth;
   canvas.height = minimapHeight;
 
-  // Clear canvas
   const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-  ctx.fillStyle = isDark ? '#1e293b' : '#f1f5f9';
-  ctx.fillRect(0, 0, minimapWidth, minimapHeight);
-
-  // World dimensions (300% of viewport)
-  const worldWidth = window.innerWidth * 3;
-  const worldHeight = window.innerHeight * 3;
-
-  // Scale factor for minimap
-  const scaleX = minimapWidth / worldWidth;
-  const scaleY = minimapHeight / worldHeight;
-
-  // Draw connections. Color follows the ends and the active choice.
-  ctx.lineWidth = 1;
-
-  config.links.forEach(conn => {
-    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
-    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
-    if (!sourceNode || !targetNode) return;
-
-    const x1 = (sourceNode.x / 100) * window.innerWidth * scaleX;
-    const y1 = (sourceNode.y / 100) * window.innerHeight * scaleY;
-    const x2 = (targetNode.x / 100) * window.innerWidth * scaleX;
-    const y2 = (targetNode.y / 100) * window.innerHeight * scaleY;
-    const look = linkAppearance(conn, displayedNodes());
-
-    ctx.beginPath();
-    ctx.strokeStyle = look.color;
-    ctx.globalAlpha = look.waiting ? 0.35 : 0.75;
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+  const shown = displayedNodes();
+  TopologyCanvas.drawMinimap(ctx, {
+    width: minimapWidth,
+    height: minimapHeight,
+    dark: isDark,
+    nodes: config.nodes,
+    links: config.links,
+    // Color follows the ends and the active choice.
+    lookFor: conn => linkAppearance(conn, shown),
+    colorFor: node => {
+      const live = networkData.find(n => n.id === node.id) || node;
+      return TopologyCanvas.minimapNodeColor(selectedNodes.has(node.id), statusView(live.status).state);
+    }
   });
 
-  // Draw nodes
-  config.nodes.forEach(node => {
-    const x = (node.x / 100) * window.innerWidth * scaleX;
-    const y = (node.y / 100) * window.innerHeight * scaleY;
-
-    // Node color based on status
-    const live = networkData.find(n => n.id === node.id) || node;
-    const view = statusView(live.status);
-
-    ctx.fillStyle = selectedNodes.has(node.id) ? '#3b82f6' :
-                    view.state === 'up' ? '#22c55e' :
-                    view.state === 'down' ? '#ef4444' : '#94a3b8';
-
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Update viewport indicator
   if (viewportIndicator) {
     const viewportRect = viewport.getBoundingClientRect();
-
-    // Calculate visible area in world coordinates
-    const visibleX = -pointX / scale;
-    const visibleY = -pointY / scale;
-    const visibleWidth = viewportRect.width / scale;
-    const visibleHeight = viewportRect.height / scale;
-
-    // Convert to minimap coordinates
-    const indicatorX = visibleX * scaleX;
-    const indicatorY = visibleY * scaleY;
-    const indicatorW = visibleWidth * scaleX;
-    const indicatorH = visibleHeight * scaleY;
-
-    viewportIndicator.style.left = Math.max(0, indicatorX) + 'px';
-    viewportIndicator.style.top = Math.max(0, indicatorY) + 'px';
-    viewportIndicator.style.width = Math.min(minimapWidth - indicatorX, indicatorW) + 'px';
-    viewportIndicator.style.height = Math.min(minimapHeight - indicatorY, indicatorH) + 'px';
+    const box = TopologyCanvas.minimapIndicator(
+      { scale, pointX, pointY },
+      viewportRect.width,
+      viewportRect.height,
+      window.innerWidth * TopologyCanvas.WORLD_FACTOR,
+      window.innerHeight * TopologyCanvas.WORLD_FACTOR,
+      minimapWidth,
+      minimapHeight
+    );
+    viewportIndicator.style.left = box.left + 'px';
+    viewportIndicator.style.top = box.top + 'px';
+    viewportIndicator.style.width = box.width + 'px';
+    viewportIndicator.style.height = box.height + 'px';
   }
 }
 

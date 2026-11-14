@@ -8,6 +8,7 @@
   let dirty = false;
   let root = null;
   let importToken = null;
+  const openProbes = new Set();
 
   function current() {
     return hooks && hooks.getDocument ? hooks.getDocument() : standaloneDocument;
@@ -26,6 +27,7 @@
     root.classList.add('open');
     bind();
     render();
+    if (window.KnownHostsAdmin) KnownHostsAdmin.mount(document.getElementById('admin-known-hosts'));
     if (window.lucide) lucide.createIcons();
   }
 
@@ -56,7 +58,7 @@
     };
     try {
       let raw = null;
-      if (window.electronAPI) raw = await window.electronAPI.config.load();
+      if (window.desktopAPI) raw = await window.desktopAPI.config.load();
       else {
         const response = await fetch('config.json');
         if (response.ok) raw = await response.json();
@@ -69,8 +71,8 @@
           alert(loaded.error);
         } else {
           standaloneDocument = loaded.document;
-          if (loaded.changed && window.electronAPI) {
-            const saved = await window.electronAPI.config.save(standaloneDocument, null);
+          if (loaded.changed && window.desktopAPI) {
+            const saved = await window.desktopAPI.config.save(standaloneDocument, null);
             if (saved && saved.success !== false && saved.config) {
               const again = Topology.read(saved.config);
               if (again.ok) standaloneDocument = again.document;
@@ -112,6 +114,15 @@
                 <input type="number" id="probeIntervalSeconds" min="1" max="60" step="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">
                 s
               </label>
+              <label class="flex items-center gap-2 text-sm text-slate-300" title="Desktop notification when a node goes down or comes back up">
+                <input type="checkbox" id="alertsEnabledCheck" class="w-4 h-4 rounded bg-slate-700 border-slate-500">
+                Alerts
+              </label>
+              <label class="flex items-center gap-2 text-sm text-slate-300" title="At most one notification per node in this window">
+                Cooldown
+                <input type="number" id="alertCooldownSeconds" min="5" max="3600" step="5" class="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">
+                s
+              </label>
             </div>
             <button id="admin-import" class="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm">
               <i data-lucide="upload" class="w-4 h-4"></i> Import
@@ -139,7 +150,7 @@
                   <th class="p-4">IP Address / Port</th>
                   <th class="p-4">Links</th>
                   <th class="p-4">Cable</th>
-                  <th class="p-4">SSH</th>
+                  <th class="p-4">SSH / SNMP</th>
                   <th class="p-4">Icon</th>
                   <th class="p-4 text-center">Preview</th>
                   <th class="p-4"></th>
@@ -152,6 +163,7 @@
             <button id="admin-add" class="w-full py-3 border-2 border-dashed border-slate-600 text-slate-500 rounded-lg hover:border-blue-500 hover:text-blue-400">Add New Device Node</button>
           </div>
         </div>
+        <div id="admin-known-hosts"></div>
       </div>`;
   }
 
@@ -177,6 +189,22 @@
       const doc = current();
       if (!doc.settings || typeof doc.settings !== 'object') doc.settings = {};
       doc.settings.probeIntervalMs = ms;
+      event.target.value = String(ms / 1000);
+      markDirty();
+    });
+    const alertOptions = Alerts.readSettings(settings);
+    const alertsCheck = document.getElementById('alertsEnabledCheck');
+    const cooldownInput = document.getElementById('alertCooldownSeconds');
+    alertsCheck.checked = alertOptions.enabled;
+    cooldownInput.value = String(alertOptions.cooldownMs / 1000);
+    alertsCheck.addEventListener('change', (event) => {
+      current().settings.alertsEnabled = event.target.checked;
+      markDirty();
+    });
+    cooldownInput.addEventListener('change', (event) => {
+      const seconds = Number(event.target.value);
+      const ms = Alerts.cooldown(Number.isFinite(seconds) ? Math.round(seconds * 1000) : NaN);
+      current().settings.alertCooldownMs = ms;
       event.target.value = String(ms / 1000);
       markDirty();
     });
@@ -207,9 +235,10 @@
         <td class="p-3 align-top"><input data-field="name" data-index="${index}" value="${escapeHtml(host.name)}" class="bg-slate-900 border border-slate-600 rounded px-3 py-2 w-full text-sm text-slate-200"></td>
         <td class="p-3 align-top">
           <div class="flex gap-2">
-            <input data-field="address" data-index="${index}" value="${escapeHtml(host.address)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-28 text-sm font-mono" placeholder="IP">
+            <input data-field="address" data-index="${index}" value="${escapeHtml(host.address)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-40 text-sm font-mono" placeholder="IPv4 / IPv6">
             <input data-field="port" data-index="${index}" value="${host.port || ''}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-16 text-sm font-mono" placeholder="Port">
           </div>
+          ${probeEditor(host, index)}
         </td>
         <td class="p-3 align-top">
           <div class="flex flex-col gap-2">
@@ -239,6 +268,7 @@
             </select>
             <input type="password" data-field="sshPass" data-index="${index}" value="" autocomplete="new-password" placeholder="${host.sshAuth === 'key' ? 'Key passphrase' : 'Password'}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-full text-xs">
             ${secretLine(host, index)}
+            ${window.SnmpUI ? SnmpUI.adminCell(host, index, escapeHtml) : ''}
           </div>
         </td>
         <td class="p-3 align-top">
@@ -263,6 +293,12 @@
     });
     tbody.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', onAction);
+    });
+    tbody.querySelectorAll('details[data-probe-id]').forEach((details) => {
+      details.addEventListener('toggle', () => {
+        if (details.open) openProbes.add(details.dataset.probeId);
+        else openProbes.delete(details.dataset.probeId);
+      });
     });
     const sshCount = doc.nodes.filter((node) => node.sshUser).length;
     const roots = doc.nodes.filter((node) => !Topology.parentNodeId(doc, node.id, 'primary')).length;
@@ -291,6 +327,54 @@
     return `<select data-field="${field}" data-index="${index}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs">${options}</select>`;
   }
 
+  // Compact editor for `node.probe` (see probe-checks.js). Every check
+  // targets the node address; a probe replaces the default ping / port probe.
+  function probeEditor(host, index) {
+    if (!window.ProbeChecks) return '';
+    const form = ProbeChecks.toForm(host.probe);
+    const label = ProbeChecks.summary(host.probe) || 'default (ping / port)';
+    const input = 'bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono';
+    const field = (name) => `data-field="probe:${name}" data-index="${index}"`;
+    const option = (value, text, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${text}</option>`;
+    return `
+      <details data-probe-id="${escapeHtml(host.id)}" ${openProbes.has(host.id) ? 'open' : ''} class="mt-2 text-[10px] text-slate-400">
+        <summary class="cursor-pointer select-none" title="A check list replaces the default ping / port probe. The node is up only when every check passes.">Checks: ${escapeHtml(label)}</summary>
+        <div class="flex flex-col gap-1 mt-1 w-60">
+          <label class="flex items-center gap-1"><input type="checkbox" ${field('ping')} ${form.ping ? 'checked' : ''}> Ping</label>
+          <div class="flex gap-1">
+            <input ${field('tcpPorts')} value="${escapeHtml(form.tcpPorts)}" class="${input} flex-1 min-w-0" placeholder="TCP ports 22,443">
+            <select ${field('tcpMode')} class="${input}" title="All ports must answer, or any one">${option('all', 'All', form.tcpMode)}${option('any', 'Any', form.tcpMode)}</select>
+          </div>
+          <div class="flex gap-1">
+            <select ${field('httpScheme')} class="${input}">${option('', 'No HTTP', form.httpScheme)}${option('http', 'HTTP', form.httpScheme)}${option('https', 'HTTPS', form.httpScheme)}</select>
+            <input ${field('httpPort')} value="${escapeHtml(form.httpPort)}" class="${input} w-14" placeholder="Port">
+            <input ${field('httpPath')} value="${escapeHtml(form.httpPath)}" class="${input} flex-1 min-w-0" placeholder="/path">
+          </div>
+          <div class="flex gap-1 items-center">
+            <input ${field('httpStatus')} value="${escapeHtml(form.httpStatus)}" class="${input} w-20" placeholder="200-399" title="Expected HTTP status or range">
+            <label class="flex items-center gap-1" title="Accept self-signed or invalid certificates (HTTPS only)"><input type="checkbox" ${field('httpInsecure')} ${form.httpInsecure ? 'checked' : ''}> Skip TLS verify</label>
+          </div>
+          <div class="flex gap-1">
+            <input ${field('dnsName')} value="${escapeHtml(form.dnsName)}" class="${input} flex-1 min-w-0" placeholder="DNS name to resolve" title="Query this node as a DNS server">
+            <select ${field('dnsType')} class="${input}">${option('A', 'A', form.dnsType)}${option('AAAA', 'AAAA', form.dnsType)}</select>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  function onProbeField(host, key, target) {
+    const form = ProbeChecks.toForm(host.probe);
+    form[key] = target.type === 'checkbox' ? target.checked : target.value;
+    const result = ProbeChecks.fromForm(form, host.probe);
+    if (!result.ok) {
+      showToast('Checks: ' + result.error, 'error');
+      return false;
+    }
+    if (result.probe) host.probe = result.probe;
+    else delete host.probe;
+    return true;
+  }
+
   function secretLine(host, index) {
     const hint = Topology.secretHint(host);
     if (!hint) return '';
@@ -307,7 +391,9 @@
     const host = doc.nodes[index];
     if (!host) return;
     let value = event.target.value;
-    if (field === 'primary' || field === 'failover') {
+    if (field.indexOf('probe:') === 0) {
+      if (!window.ProbeChecks || !onProbeField(host, field.slice(6), event.target)) return;
+    } else if (field === 'primary' || field === 'failover') {
       Topology.setParent(doc, host.id, field === 'primary' ? 'primary' : 'failover', value || null);
     } else if (field === 'medium' || field === 'speed') {
       const cable = Topology.primaryCable(doc, host.id);
@@ -320,6 +406,8 @@
       host.sshAuth = value === 'key' ? 'key' : 'password';
     } else if (field === 'sshPass') {
       Topology.acceptSecretEdit(host, value);
+    } else if (window.SnmpUI && SnmpUI.applyAdminField(host, field, event.target)) {
+      // SNMP settings and community
     } else {
       host[field] = value;
     }
@@ -332,6 +420,13 @@
     const index = Number(button.dataset.index);
     if (button.dataset.action === 'duplicate') duplicateRow(index);
     if (button.dataset.action === 'delete') removeRow(index);
+    if (button.dataset.action === 'clear-snmp-community' && window.SnmpUI) {
+      const host = current() && current().nodes[index];
+      if (!host) return;
+      SnmpUI.clearCommunity(host);
+      markDirty();
+      render();
+    }
     if (button.dataset.action === 'clear-secret') {
       const doc = current();
       const host = doc && doc.nodes[index];
@@ -418,8 +513,8 @@
       showToast(prepared.error, 'error');
       return false;
     }
-    if (window.electronAPI) {
-      const result = await window.electronAPI.config.save(prepared.document, importToken);
+    if (window.desktopAPI) {
+      const result = await window.desktopAPI.config.save(prepared.document, importToken);
       if (!result || result.success === false) {
         showToast('Failed to save: ' + ((result && result.error) || 'unknown error'), 'error');
         return false;
@@ -452,7 +547,7 @@
       return;
     }
     const exported = Topology.withoutSecretValues(prepared.document);
-    if (window.electronAPI) await window.electronAPI.config.export(exported);
+    if (window.desktopAPI) await window.desktopAPI.config.export(exported);
     else download(exported);
   }
 
@@ -467,8 +562,8 @@
   }
 
   async function importStandalone() {
-    if (window.electronAPI) {
-      const result = await window.electronAPI.config.import();
+    if (window.desktopAPI) {
+      const result = await window.desktopAPI.config.import();
       if (!result || result.canceled) return null;
       if (!result.success || !result.config) {
         alert((result && result.error) || 'Import failed');
@@ -481,7 +576,7 @@
       }
       if (!window.confirm(Topology.importMessage(loaded.document))) {
         importToken = null;
-        if (window.electronAPI.config.discardImport) await window.electronAPI.config.discardImport();
+        if (window.desktopAPI.config.discardImport) await window.desktopAPI.config.discardImport();
         return null;
       }
       importToken = result.importToken || null;

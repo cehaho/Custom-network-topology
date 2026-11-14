@@ -14,7 +14,7 @@
 
   const SCHEMA_VERSION = 1;
   const DOCUMENT_KEYS = ['schemaVersion', 'settings', 'nodes', 'links', 'ports'];
-  const RUNTIME_FIELDS = ['status', 'uptime', 'activeParentId', 'level', 'responseTime'];
+  const RUNTIME_FIELDS = ['status', 'uptime', 'activeParentId', 'level', 'responseTime', 'probeDetail'];
   const PARENT_FIELDS = ['primaryParentId', 'secondaryParentId'];
 
   function emptyDocument() {
@@ -34,7 +34,9 @@
       snapToGrid: true,
       theme: 'dark',
       probeIntervalMs: 5000,
-      confirmations: 2
+      confirmations: 2,
+      alertsEnabled: true,
+      alertCooldownMs: 60000
     };
   }
 
@@ -50,15 +52,48 @@
     return typeof value === 'string' ? value : '';
   }
 
+  // Per-node probe rules live in probe-checks.js (loaded before this file).
+  function probeChecks() {
+    if (typeof module === 'object' && module.exports && typeof require === 'function') {
+      return require('./probe-checks.js');
+    }
+    return globalThis.ProbeChecks || null;
+  }
+
+  function probeError(nodes) {
+    const checks = probeChecks();
+    if (!checks) return '';
+    for (let index = 0; index < nodes.length; index += 1) {
+      const error = checks.nodeError(nodes[index]);
+      if (error) return error;
+    }
+    return '';
+  }
+
+  function normalizeNodeProbe(node) {
+    const checks = probeChecks();
+    if (!checks || !Object.prototype.hasOwnProperty.call(node, 'probe')) return false;
+    const result = checks.normalize(node.probe);
+    if (result.ok && result.probe) {
+      const same = JSON.stringify(result.probe) === JSON.stringify(node.probe);
+      node.probe = result.probe;
+      return !same;
+    }
+    delete node.probe;
+    return true;
+  }
+
   function validateIncoming(raw) {
     if (Array.isArray(raw)) {
       if (!raw.every(isObject)) return 'Configuration nodes must be objects';
-      return '';
+      return probeError(raw);
     }
     if (!isObject(raw)) return 'Configuration must be a JSON object';
     if (!Object.prototype.hasOwnProperty.call(raw, 'nodes')) return 'Configuration has no nodes';
     if (!Array.isArray(raw.nodes)) return 'Configuration nodes must be an array';
     if (!raw.nodes.every(isObject)) return 'Configuration nodes must be objects';
+    const nodeProbeError = probeError(raw.nodes);
+    if (nodeProbeError) return nodeProbeError;
     if (raw.schemaVersion !== undefined && raw.schemaVersion !== SCHEMA_VERSION) {
       return 'Unsupported topology version: ' + String(raw.schemaVersion);
     }
@@ -114,7 +149,10 @@
       }
       if (!Array.isArray(node.ports) || node.ports.length === 0) changed = true;
       ensureDefaultPorts(node);
+      if (normalizeActionFields(node)) changed = true;
+      if (normalizeNodeProbe(node)) changed = true;
       node.ports = node.ports.map(normalizePort).filter(Boolean);
+      if (normalizeSnmp(node)) changed = true;
     });
 
     const incomingLinks = []
@@ -177,6 +215,8 @@
     const settings = Object.assign(defaultSettings(), source);
     settings.probeIntervalMs = clampInterval(settings.probeIntervalMs);
     settings.confirmations = clampConfirmations(settings.confirmations);
+    settings.alertsEnabled = settings.alertsEnabled !== false;
+    settings.alertCooldownMs = clampAlertCooldown(settings.alertCooldownMs);
     return settings;
   }
 
@@ -184,6 +224,13 @@
     const value = Number(requested);
     if (Number.isFinite(value) && value >= 1000 && value <= 60000) return value;
     return 5000;
+  }
+
+  // Keep aligned with renderer/js/alerts.js and src-tauri/src/topology.rs.
+  function clampAlertCooldown(requested) {
+    const value = Number(requested);
+    if (Number.isFinite(value) && value >= 5000 && value <= 3600000) return Math.floor(value);
+    return 60000;
   }
 
   function clampConfirmations(requested) {
@@ -228,6 +275,62 @@
     return copy;
   }
 
+  // Optional quick-action fields (context menu): `mac`, `wolBroadcast`,
+  // `webUrlScheme`, `webPort`. Keep aligned with src-tauri/src/actions.rs.
+  // A valid value is stored in canonical form, an invalid one is dropped.
+  function parseMac(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim();
+    let hex = null;
+    if (/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(value) || /^[0-9a-f]{2}(-[0-9a-f]{2}){5}$/i.test(value)
+      || /^[0-9a-f]{4}(\.[0-9a-f]{4}){2}$/i.test(value) || /^[0-9a-f]{12}$/i.test(value)) {
+      hex = value.replace(/[^0-9a-f]/gi, '').toLowerCase();
+    }
+    if (!hex || hex === '000000000000' || (parseInt(hex.slice(0, 2), 16) & 1) === 1) return null;
+    return hex.match(/../g).join(':');
+  }
+
+  function parseBroadcast(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim();
+    const octet = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+    if (!new RegExp('^' + octet + '(\\.' + octet + '){3}$').test(value)) return null;
+    const first = parseInt(value.split('.')[0], 10);
+    if (value === '0.0.0.0' || (first >= 224 && first <= 239)) return null;
+    return value;
+  }
+
+  function parseWebScheme(text) {
+    if (typeof text !== 'string') return null;
+    const value = text.trim().toLowerCase();
+    return value === 'http' || value === 'https' ? value : null;
+  }
+
+  function parseWebPort(value) {
+    const text = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+    if (!/^\d{1,5}$/.test(text)) return null;
+    const port = parseInt(text, 10);
+    return port >= 1 && port <= 65535 ? port : null;
+  }
+
+  const ACTION_FIELDS = { mac: parseMac, wolBroadcast: parseBroadcast, webUrlScheme: parseWebScheme, webPort: parseWebPort };
+
+  function normalizeActionFields(node) {
+    let changed = false;
+    Object.keys(ACTION_FIELDS).forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(node, key)) return;
+      const parsed = ACTION_FIELDS[key](node[key]);
+      if (parsed === null) {
+        delete node[key];
+        changed = true;
+      } else if (parsed !== node[key]) {
+        node[key] = parsed;
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
   function linkNeedsRewrite(rawLink) {
     if (!isObject(rawLink)) return true;
     if (rawLink.role !== 'primary' && rawLink.role !== 'failover') return true;
@@ -253,7 +356,69 @@
     if (typeof link.id !== 'string' || !link.id) {
       link.id = 'link_' + (link.targetNodeId || 'x') + '_' + role;
     }
+    normalizeLinkSnmp(link);
     return link;
+  }
+
+  // SNMP fields. Keep aligned with src-tauri/src/snmp/model.rs.
+  // Returns true when the node was changed.
+  function normalizeSnmp(node) {
+    const before = JSON.stringify([node.snmp, node.snmpSecret, node.snmpCommunity, node.snmpCommunityClear]);
+    if (Object.prototype.hasOwnProperty.call(node, 'snmp')) {
+      if (!isObject(node.snmp)) {
+        delete node.snmp;
+      } else {
+        const port = Number(node.snmp.port);
+        const normalized = {
+          enabled: node.snmp.enabled === true,
+          port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 161,
+          version: '2c'
+        };
+        if (typeof node.snmp.community === 'string' && node.snmp.community) {
+          normalized.community = node.snmp.community;
+        }
+        node.snmp = normalized;
+      }
+    }
+    if (node.snmpSecret !== undefined && !(isObject(node.snmpSecret) && node.snmpSecret.type === 'community')) {
+      delete node.snmpSecret;
+    }
+    if (node.snmpCommunity !== undefined && typeof node.snmpCommunity !== 'string') delete node.snmpCommunity;
+    if (node.snmpCommunityClear !== undefined && node.snmpCommunityClear !== true) delete node.snmpCommunityClear;
+    return before !== JSON.stringify([node.snmp, node.snmpSecret, node.snmpCommunity, node.snmpCommunityClear]);
+  }
+
+  function normalizeLinkSnmp(link) {
+    if (link.snmpIfIndex !== undefined) {
+      const index = typeof link.snmpIfIndex === 'string' && /^\s*\d+\s*$/.test(link.snmpIfIndex)
+        ? Number(link.snmpIfIndex)
+        : link.snmpIfIndex;
+      if (Number.isInteger(index) && index >= 1 && index <= 2147483647) link.snmpIfIndex = index;
+      else delete link.snmpIfIndex;
+    }
+    if (link.snmpIfName !== undefined) {
+      const name = typeof link.snmpIfName === 'string' ? link.snmpIfName.trim() : '';
+      // eslint-disable-next-line no-control-regex
+      if (name && Array.from(name).length <= 64 && !/[\u0000-\u001f\u007f-\u009f]/.test(name)) link.snmpIfName = name;
+      else delete link.snmpIfName;
+    }
+    if (link.snmpNodeId !== undefined) {
+      const owner = typeof link.snmpNodeId === 'string' ? link.snmpNodeId : '';
+      if (!owner || (owner !== link.sourceNodeId && owner !== link.targetNodeId)) delete link.snmpNodeId;
+    }
+  }
+
+  function snmpCommunitySaved(node) {
+    return !!(node && isObject(node.snmpSecret) && node.snmpSecret.type === 'community');
+  }
+
+  // Like the SSH fields: a value that was not saved does not become a marker.
+  function stripSnmpCommunity(node) {
+    delete node.snmpCommunity;
+    delete node.snmpCommunityClear;
+    if (isObject(node.snmp)) delete node.snmp.community;
+    if (snmpCommunitySaved(node)) node.snmpSecret = { type: 'community' };
+    else delete node.snmpSecret;
   }
 
   function valueOr(primary, fallback) {
@@ -461,8 +626,12 @@
           { id: id + '_out', name: 'OUT', side: 'bottom' }
         ]
     };
-    ['isContainer', 'containerType', 'zones', 'containerId', 'zoneId', 'expanded'].forEach((key) => {
+    ['isContainer', 'containerType', 'zones', 'containerId', 'zoneId', 'expanded', 'probe'].forEach((key) => {
       if (source[key] !== undefined) node[key] = source[key];
+    });
+    Object.keys(ACTION_FIELDS).forEach((key) => {
+      const parsed = source[key] === undefined || source[key] === null ? null : ACTION_FIELDS[key](source[key]);
+      if (parsed !== null) node[key] = parsed;
     });
     return node;
   }
@@ -484,6 +653,7 @@
       if (type) node.sshSecret = { type: type };
       else delete node.sshSecret;
     }
+    stripSnmpCommunity(node);
   }
 
   function withoutSecretValues(document) {
@@ -496,6 +666,7 @@
     return ((document && document.nodes) || []).some((node) => {
       if (!node) return false;
       if (node.sshPass || node.sshPassphrase || node._encrypted === true) return true;
+      if (node.snmpCommunity || (isObject(node.snmp) && node.snmp.community)) return true;
       const secret = node.sshSecret;
       return !!(secret && (secret.value || secret.secret));
     });
@@ -534,6 +705,7 @@
     if (node) {
       delete node.sshSecret;
       delete node.sshSecretClear;
+      delete node.snmpSecret;
     }
   }
 
@@ -574,6 +746,12 @@
     secretHint: secretHint,
     acceptSecretEdit: acceptSecretEdit,
     clearStoredSecret: clearStoredSecret,
-    forgetInheritedSecret: forgetInheritedSecret
+    forgetInheritedSecret: forgetInheritedSecret,
+    parseMac: parseMac,
+    parseBroadcast: parseBroadcast,
+    parseWebScheme: parseWebScheme,
+    parseWebPort: parseWebPort,
+    normalizeActionFields: normalizeActionFields,
+    snmpCommunitySaved: snmpCommunitySaved
   };
 });
