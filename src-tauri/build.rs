@@ -18,6 +18,7 @@ fn main() {
         "network_neighbors",
         "monitor_start",
         "monitor_stop",
+        "alerts_notify",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

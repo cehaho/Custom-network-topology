@@ -33,7 +33,9 @@ fn default_settings() -> Value {
         "snapToGrid": true,
         "theme": "dark",
         "probeIntervalMs": 5000,
-        "confirmations": 2
+        "confirmations": 2,
+        "alertsEnabled": true,
+        "alertCooldownMs": 60000
     })
 }
 
@@ -196,7 +198,19 @@ fn normalize_settings(value: Option<&Value>) -> Value {
     );
     settings.insert("probeIntervalMs".to_string(), json!(interval));
     settings.insert("confirmations".to_string(), json!(confirmations));
+    let alerts_enabled = settings.get("alertsEnabled").and_then(Value::as_bool) != Some(false);
+    let alert_cooldown = alert_cooldown_ms(settings.get("alertCooldownMs").and_then(Value::as_f64));
+    settings.insert("alertsEnabled".to_string(), json!(alerts_enabled));
+    settings.insert("alertCooldownMs".to_string(), json!(alert_cooldown));
     Value::Object(settings)
+}
+
+/// Keep aligned with `renderer/js/alerts.js` and `renderer/js/topology.js`.
+fn alert_cooldown_ms(requested: Option<f64>) -> u64 {
+    match requested {
+        Some(value) if value.is_finite() && (5000.0..=3_600_000.0).contains(&value) => value as u64,
+        _ => 60_000,
+    }
 }
 
 fn attach_detached_ports(nodes: &mut [Value], ports: &Value) {
@@ -650,6 +664,27 @@ mod tests {
         }
         let again = read_document(document).unwrap();
         assert!(again["nodes"][0].get("primaryParentId").is_none());
+    }
+
+    #[test]
+    fn alert_settings_default_keep_and_clamp() {
+        let missing = read_document(json!({ "nodes": [], "settings": { "showGrid": false } })).unwrap();
+        assert_eq!(missing["settings"]["alertsEnabled"], true);
+        assert_eq!(missing["settings"]["alertCooldownMs"], 60000);
+        let kept = read_document(json!({
+            "nodes": [],
+            "settings": { "alertsEnabled": false, "alertCooldownMs": 300000 }
+        }))
+        .unwrap();
+        assert_eq!(kept["settings"]["alertsEnabled"], false);
+        assert_eq!(kept["settings"]["alertCooldownMs"], 300000);
+        let clamped = read_document(json!({
+            "nodes": [],
+            "settings": { "alertsEnabled": "no", "alertCooldownMs": 1 }
+        }))
+        .unwrap();
+        assert_eq!(clamped["settings"]["alertsEnabled"], true);
+        assert_eq!(clamped["settings"]["alertCooldownMs"], 60000);
     }
 
     #[test]

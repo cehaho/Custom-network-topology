@@ -1,3 +1,4 @@
+mod alerts;
 mod config;
 mod hosts;
 mod known_hosts;
@@ -205,6 +206,7 @@ async fn monitor_stop(state: tauri::State<'_, AppState>) -> Result<Value, String
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             ssh: Arc::new(Mutex::new(ssh::Hub::new())),
             monitor: Mutex::new(None),
@@ -239,6 +241,7 @@ pub fn run() {
             network_neighbors,
             monitor_start,
             monitor_stop,
+            alerts::alerts_notify,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
