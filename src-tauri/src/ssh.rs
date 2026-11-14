@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
-use crate::hosts::{is_reasonable_username, is_safe_host, is_safe_port};
+use crate::hosts::{is_reasonable_username, is_safe_port, normalize_host};
 use crate::known_hosts::{self, HostKey, Verdict};
 
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
@@ -162,14 +162,17 @@ fn host_key_failure(host: &str, port: u16, refusal: HostKeyRefusal) -> Value {
 
 /// Removes the pinned key for `host:port` so the next connection asks again.
 pub fn forget_host_key(app: &AppHandle, host: &str, port: u64) -> Value {
-    if !is_safe_host(host) || port > u64::from(u16::MAX) || !is_safe_port(port as i64) {
+    let Some(host) = normalize_host(host) else {
+        return failure("Invalid SSH host or port");
+    };
+    if port > u64::from(u16::MAX) || !is_safe_port(port as i64) {
         return failure("Invalid SSH host or port");
     }
     let path = match crate::config::known_hosts_path(app) {
         Ok(path) => path,
         Err(error) => return failure(&error),
     };
-    match known_hosts::forget(&path, host, port as u16) {
+    match known_hosts::forget(&path, &host, port as u16) {
         Ok(removed) => json!({ "success": true, "removed": removed }),
         Err(error) => failure(&error),
     }
@@ -183,16 +186,18 @@ pub async fn connect(app: AppHandle, hub: Arc<Mutex<Hub>>, request: Value) -> Va
         Some(node_id) if !node_id.is_empty() && node_id.len() <= 128 => node_id.to_string(),
         _ => return failure("Invalid node id"),
     };
-    let host = request.get("host").and_then(Value::as_str).unwrap_or("");
+    // An IPv6 literal may arrive bracketed (`[::1]`); keep the bare form.
+    let Some(host) = normalize_host(request.get("host").and_then(Value::as_str).unwrap_or(""))
+    else {
+        return failure("Invalid SSH host, port, or username");
+    };
+    let host = host.as_str();
     let port = request.get("port").and_then(Value::as_u64).unwrap_or(22);
     let username = request
         .get("username")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if !is_safe_host(host)
-        || port > u64::from(u16::MAX)
-        || !is_safe_port(port as i64)
-        || !is_reasonable_username(username)
+    if port > u64::from(u16::MAX) || !is_safe_port(port as i64) || !is_reasonable_username(username)
     {
         return failure("Invalid SSH host, port, or username");
     }
@@ -218,7 +223,7 @@ pub async fn connect(app: AppHandle, hub: Arc<Mutex<Hub>>, request: Value) -> Va
                 Err(error) => match load_private_key(path, None) {
                     Ok(_) => {}
                     Err(read_error) if read_error == "Passphrase required" => {
-                        return failure(&error)
+                        return failure(&error);
                     }
                     Err(read_error) => return failure(&read_error),
                 },

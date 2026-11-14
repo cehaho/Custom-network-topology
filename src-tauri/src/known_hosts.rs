@@ -1,7 +1,7 @@
 //! Pinned SSH host keys (trust on first use).
 //!
 //! The file `known_hosts.json` sits next to the topology file. It holds only
-//! public data: for each `host:port`, the key algorithm, its SHA256
+//! public data: for each `host:port` (`[addr]:port` for IPv6), the key algorithm, its SHA256
 //! fingerprint, and the full public key in OpenSSH form. Matching compares the
 //! full key, not just the fingerprint.
 
@@ -10,6 +10,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+
+use crate::hosts::{canonical_host, format_host_port};
 
 const FILE_VERSION: u32 = 1;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
@@ -49,13 +51,11 @@ pub enum Verdict {
     Mismatch { stored: HostKey },
 }
 
+/// The key of a pinned host: `host:port` for IPv4 and hostnames (lower-cased,
+/// as before), `[addr]:port` for IPv6 with the address in canonical form, so
+/// `[2001:db8::1]:22` stays unambiguous and `2001:DB8:0::1` matches it.
 pub fn entry_name(host: &str, port: u16) -> String {
-    let host = host.trim().to_ascii_lowercase();
-    if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
+    format_host_port(&canonical_host(host), port)
 }
 
 /// Compares `presented` with what is pinned for `host:port`.
@@ -225,6 +225,28 @@ mod tests {
             check(&path, "10.0.0.1", 22, &key("B")).unwrap(),
             Verdict::Match
         );
+    }
+
+    #[test]
+    fn ipv6_entries_are_bracketed_and_canonical() {
+        assert_eq!(entry_name("10.0.0.1", 22), "10.0.0.1:22");
+        assert_eq!(entry_name("Router.LAN", 22), "router.lan:22");
+        assert_eq!(entry_name("::1", 22), "[::1]:22");
+        assert_eq!(entry_name("2001:DB8:0:0::1", 2222), "[2001:db8::1]:2222");
+        assert_eq!(entry_name("fe80::1%eth0", 22), "[fe80::1%eth0]:22");
+
+        let path = temp_path("ipv6");
+        remember(&path, "2001:db8::1", 22, &key("A")).unwrap();
+        assert_eq!(
+            check(&path, "2001:DB8:0::1", 22, &key("A")).unwrap(),
+            Verdict::Match
+        );
+        assert_eq!(
+            check(&path, "2001:db8::1", 2222, &key("A")).unwrap(),
+            Verdict::Unknown
+        );
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("\"[2001:db8::1]:22\""));
     }
 
     #[test]
