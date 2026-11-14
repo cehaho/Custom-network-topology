@@ -2782,7 +2782,11 @@ async function openDiscoveryModal() {
   // The range scan is IPv4 only; IPv6 entries (family "IPv6") are skipped
   // here. IPv6 hosts come from the neighbour table after the scan.
   const localInfo = await window.desktopAPI.network.getLocalInfo();
-  networkInterfaces = (Array.isArray(localInfo) ? localInfo : []).filter((iface) => iface.family !== 'IPv6');
+  networkInterfaces = (Array.isArray(localInfo) ? localInfo : []).filter((iface) =>
+    iface.family !== 'IPv6' &&
+    // A /32 has no neighbours to scan (WSL puts 10.255.255.254/32 on lo).
+    iface.netmask !== '255.255.255.255' &&
+    iface.interface !== 'lo');
   const select = document.getElementById('discovery-interface');
   select.innerHTML = '';
 

@@ -14,8 +14,9 @@ use tauri_plugin_dialog::DialogExt;
 
 use rules::Format;
 
+// Async so the blocking save dialog does not run on the main thread.
 #[tauri::command]
-pub fn image_export(
+pub async fn image_export(
     app: AppHandle,
     format: String,
     data: String,

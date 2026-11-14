@@ -93,6 +93,12 @@
     place();
   }
 
+  // The node context menu sits where the tooltip would; never cover it.
+  function menuOpen() {
+    const menu = document.getElementById('context-menu');
+    return Boolean(menu && !menu.classList.contains('hidden'));
+  }
+
   function hide() {
     hoveredId = null;
     if (tooltip) tooltip.style.display = 'none';
@@ -106,6 +112,7 @@
       return;
     }
     lastPointer = { x: event.clientX, y: event.clientY };
+    if (menuOpen()) return;
     const id = target.dataset.nodeId;
     if (id !== hoveredId) show(id);
   });
@@ -118,6 +125,7 @@
 
   // Dragging or panning hides the tooltip until the pointer comes back.
   document.addEventListener('mousedown', hide);
+  document.addEventListener('contextmenu', hide);
   window.addEventListener('blur', hide);
 
   if (window.desktopAPI && window.desktopAPI.monitor && window.desktopAPI.monitor.onStatus) {

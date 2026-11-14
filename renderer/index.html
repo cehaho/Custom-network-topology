@@ -113,6 +113,22 @@
     .toolbar-btn:hover { background: rgba(128,128,128,0.15); color: var(--text-primary); }
     .toolbar-btn.active { background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; color: #60a5fa; }
     .toolbar-divider { width: 1px; height: 24px; background: var(--border-color); }
+    /* Keep labels on one line; on narrower windows the buttons keep only their icon (each has a title). */
+    #toolbar { flex-wrap: wrap; row-gap: 8px; gap: 12px; }
+    #toolbar > *, .toolbar-btn span, #node-search-count { white-space: nowrap; flex-shrink: 0; }
+    @media (max-width: 1500px) { #toolbar .toolbar-btn span { display: none; } }
+    /* WebKitGTK draws native selects with the GTK (light) theme and ignores
+       the background, so the text became unreadable. Draw them ourselves. */
+    :root { color-scheme: dark; }
+    [data-theme="light"] { color-scheme: light; }
+    select {
+      -webkit-appearance: none; appearance: none;
+      background-color: var(--bg-input) !important; color: var(--text-primary) !important;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+      background-repeat: no-repeat !important; background-position: right 10px center !important;
+      padding-right: 30px !important;
+    }
+    select option { background: var(--bg-input); color: var(--text-primary); }
 
     /* --- MODALS --- */
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }

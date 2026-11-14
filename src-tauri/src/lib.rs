@@ -86,13 +86,18 @@ fn take_matching_import(
     }
 }
 
+// Commands that open a native file dialog are async: a sync command runs on
+// the main thread, and a blocking dialog there freezes the GTK main loop.
 #[tauri::command]
-fn config_export(app: tauri::AppHandle, config: Value) -> Value {
+async fn config_export(app: tauri::AppHandle, config: Value) -> Value {
     config::export(&app, config)
 }
 
 #[tauri::command]
-fn config_import(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Value {
+async fn config_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
     let imported = config::import(&app);
     let mut guard = pending_import(&state);
     *guard = match (imported.token, imported.secrets.is_empty()) {
@@ -102,7 +107,7 @@ fn config_import(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Va
         }),
         _ => None,
     };
-    imported.response
+    Ok(imported.response)
 }
 
 #[tauri::command]
@@ -112,7 +117,7 @@ fn config_discard_import(state: tauri::State<'_, AppState>) -> Value {
 }
 
 #[tauri::command]
-fn ssh_browse_key(app: tauri::AppHandle) -> Value {
+async fn ssh_browse_key(app: tauri::AppHandle) -> Value {
     config::browse_key(&app)
 }
 
@@ -163,7 +168,7 @@ fn ssh_known_hosts_list(app: tauri::AppHandle) -> Value {
 }
 
 #[tauri::command]
-fn ssh_known_hosts_import_openssh(app: tauri::AppHandle) -> Value {
+async fn ssh_known_hosts_import_openssh(app: tauri::AppHandle) -> Value {
     known_hosts_admin::import_openssh(&app)
 }
 
