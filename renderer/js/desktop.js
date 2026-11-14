@@ -52,6 +52,9 @@
       neighbors: () => invoke('network_neighbors'),
       onScanProgress: (callback) => subscribe('network-scan-progress', callback)
     },
+    image: {
+      export: (format, data, fileName) => invoke('image_export', { format, data, fileName })
+    },
     monitor: {
       start: (config) => invoke('monitor_start', { config }),
       stop: () => invoke('monitor_stop'),

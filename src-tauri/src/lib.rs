@@ -1,5 +1,6 @@
 mod alerts;
 mod config;
+mod export;
 mod hosts;
 mod known_hosts;
 mod latency;
@@ -256,6 +257,7 @@ pub fn run() {
             monitor_start,
             monitor_stop,
             alerts::alerts_notify,
+            export::image_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -21,6 +21,7 @@ fn main() {
         "monitor_start",
         "monitor_stop",
         "alerts_notify",
+        "image_export",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

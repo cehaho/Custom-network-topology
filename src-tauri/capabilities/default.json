@@ -27,6 +27,7 @@
     "allow-network-neighbors",
     "allow-monitor-start",
     "allow-monitor-stop",
-    "allow-alerts-notify"
+    "allow-alerts-notify",
+    "allow-image-export"
   ]
 }
