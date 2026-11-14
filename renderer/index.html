@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost;">
   <title>Network Topology</title>
   <link rel="stylesheet" href="vendor/tailwind.css">
   <script src="vendor/lucide.min.js"></script>
@@ -530,6 +530,8 @@
 
 <script src="vendor/xterm/xterm.js"></script>
 <script src="vendor/addon-fit/addon-fit.js"></script>
+<!-- Libraries: plain scripts that set globals (the tests require() them).
+     js/app/libs.js re-exports them to the modules. -->
 <script src="js/probe-checks.js"></script>
 <script src="js/topology.js"></script>
 <script src="js/hosts.js"></script>
@@ -537,17 +539,15 @@
 <script src="js/alerts.js"></script>
 <script src="js/canvas.js"></script>
 <script src="js/search.js"></script>
-<script src="js/search-ui.js"></script>
 <script src="js/export.js"></script>
 <script src="js/discovery.js"></script>
+<script src="js/history.js"></script>
 <script src="js/desktop.js"></script>
-<script src="js/alert-notifier.js"></script>
 <script src="js/known-hosts-admin.js"></script>
 <script src="js/snmp.js"></script>
 <script src="js/admin.js"></script>
 <script src="js/actions.js"></script>
-<script src="js/app.js"></script>
-<script src="js/history.js"></script>
-<script src="js/latency-ui.js"></script>
+<!-- The page itself: ES modules under js/app/, run after the scripts above. -->
+<script type="module" src="js/app/main.js"></script>
 </body>
 </html>

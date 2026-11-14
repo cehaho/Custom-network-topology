@@ -133,20 +133,23 @@ test('long names are shortened', () => {
   assert.equal(Export.truncate('abc', 5), 'abc');
 });
 
-test('the page loads export.js before app.js', () => {
+test('the page loads export.js before the app modules', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
   const at = html.indexOf('src="js/export.js"');
   assert.ok(at > 0);
-  assert.ok(at < html.indexOf('src="js/app.js"'));
+  assert.ok(at < html.indexOf('<script type="module" src="js/app/main.js">'));
 });
 
 test('image export is wired through a dialog command, not a blob download', () => {
   const root = path.join(__dirname, '..');
-  const app = fs.readFileSync(path.join(root, 'renderer', 'js', 'app.js'), 'utf8');
+  const appDir = path.join(root, 'renderer', 'js', 'app');
+  const app = fs.readdirSync(appDir).filter((file) => file.endsWith('.js'))
+    .map((file) => fs.readFileSync(path.join(appDir, file), 'utf8')).join('\n');
+  assert.match(app, /TopologyExport\.exportImage\(/);
   const desktop = fs.readFileSync(path.join(root, 'renderer', 'js', 'desktop.js'), 'utf8');
   const build = fs.readFileSync(path.join(root, 'src-tauri', 'build.rs'), 'utf8');
   const caps = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'capabilities', 'default.json'), 'utf8'));
-  assert.ok(!/a\.download\s*=/.test(app), 'no <a download> left in app.js');
+  assert.ok(!/a\.download\s*=/.test(app), 'no <a download> left in the app modules');
   assert.match(desktop, /invoke\('image_export', \{ format, data, fileName \}\)/);
   assert.ok(build.includes('"image_export"'));
   assert.ok(caps.permissions.includes('allow-image-export'));

@@ -153,12 +153,13 @@ test('pings IPv6 with -6 or ping6 depending on the platform', () => {
   assert.deepEqual(pingArgs('gateway.local', 'win32'), ['-n', '1', '-w', '1000', 'gateway.local']);
 });
 
-test('the page loads hosts.js before app.js and the module sets the global', () => {
+test('the page loads hosts.js before the app modules and the module sets the global', () => {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
   const hostsAt = html.indexOf('src="js/hosts.js"');
   assert.ok(hostsAt > 0, 'hosts.js is loaded');
-  assert.ok(hostsAt < html.indexOf('src="js/app.js"'), 'before app.js');
+  const appAt = html.indexOf('<script type="module" src="js/app/main.js">');
+  assert.ok(appAt > 0 && hostsAt < appAt, 'before js/app/main.js');
   assert.equal(globalThis.Hosts, require('../lib/hosts'));
 });

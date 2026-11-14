@@ -70,8 +70,16 @@
     return root.document ? root.document.getElementById(id) : null;
   }
 
+  // The page hands over its toasts and modal opener (renderer/js/app/main.js):
+  // { toastSuccess, toastError, toastInfo, openModal }.
+  let ui = {};
+
+  function useUi(hooks) {
+    ui = hooks || {};
+  }
+
   function notify(kind, title, message) {
-    const fn = { success: root.toastSuccess, error: root.toastError, info: root.toastInfo }[kind];
+    const fn = { success: ui.toastSuccess, error: ui.toastError, info: ui.toastInfo }[kind];
     if (typeof fn === 'function') fn(title, message);
   }
 
@@ -164,7 +172,7 @@
     el('traceroute-title').textContent = 'Traceroute to ' + host;
     el('traceroute-status').textContent = 'Running (up to 30 hops, 30 s)…';
     el('traceroute-output').textContent = '';
-    if (typeof root.openModal === 'function') root.openModal('traceroute-modal');
+    if (typeof ui.openModal === 'function') ui.openModal('traceroute-modal');
     let result;
     try {
       result = await api.traceroute(host);
@@ -252,6 +260,7 @@
     nodeWebUrl: nodeWebUrl,
     formatHops: formatHops,
     applyNodeFields: applyNodeFields,
+    useUi: useUi,
     prepareMenu: prepareMenu,
     copyAddress: copyAddress,
     openWeb: openWeb,
