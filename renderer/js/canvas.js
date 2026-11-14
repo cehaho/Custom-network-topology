@@ -1,7 +1,7 @@
 // Canvas geometry: grid snap, zoom and pan, port anchors, link paths,
 // rectangle selection, auto-layout and the minimap.
 //
-// Pure functions only. app.js owns the DOM and the view state
+// Pure functions only; the app/ modules own the DOM and the view state
 // ({ scale, pointX, pointY }) and passes measurements in. Node positions are
 // percentages of the viewport (x of the width, y of the height); the grid is
 // 20 columns by 50 rows of 5% each.
