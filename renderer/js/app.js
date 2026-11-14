@@ -922,6 +922,7 @@ function renderTree(nodes) {
   });
 
   lucide.createIcons();
+  CanvasSearch.decorate();
   requestAnimationFrame(drawLines);
 }
 
@@ -1048,6 +1049,7 @@ function drawLines() {
       svg.appendChild(text);
     }
   });
+  CanvasSearch.decorate();
 }
 
 // Get the pixel position of a port on a node
@@ -1623,26 +1625,8 @@ function applyNodeFilter() {
   // Get nodes from monitoring data if active, otherwise from config
   const sourceNodes = monitoringActive && networkData.length ? networkData : config.nodes;
 
-  // Filter nodes
-  const filteredNodes = sourceNodes.filter(node => {
-    // Search filter (name or address)
-    const matchesSearch = !searchTerm ||
-      (node.name && node.name.toLowerCase().includes(searchTerm)) ||
-      (node.address && node.address.toLowerCase().includes(searchTerm));
-
-    // Status filter
-    let matchesStatus = true;
-    const state = Probe.canonicalStatus(node.status);
-    if (statusFilter === 'online') {
-      matchesStatus = state === 'up';
-    } else if (statusFilter === 'offline') {
-      matchesStatus = state === 'down';
-    } else if (statusFilter === 'unknown') {
-      matchesStatus = state === 'unknown';
-    }
-
-    return matchesSearch && matchesStatus;
-  });
+  // Filter nodes (query syntax in search.js); also highlights the canvas.
+  const filteredNodes = CanvasSearch.filter(sourceNodes);
 
   // Update host list with filtered nodes
   renderHostList(filteredNodes);
@@ -1654,31 +1638,6 @@ function applyNodeFilter() {
   } else {
     countEl.innerText = sourceNodes.length;
   }
-
-  // Highlight matching nodes in viewport
-  highlightFilteredNodes(filteredNodes.map(n => n.id));
-}
-
-function highlightFilteredNodes(matchingIds) {
-  const searchTerm = document.getElementById('node-search').value.trim();
-  const statusFilter = document.getElementById('node-filter-status').value;
-  const isFiltering = searchTerm || statusFilter !== 'all';
-
-  document.querySelectorAll('.node-container').forEach(el => {
-    const nodeId = el.id.replace('node-', '');
-    if (isFiltering) {
-      if (matchingIds.includes(nodeId)) {
-        el.style.opacity = '1';
-        el.style.filter = 'none';
-      } else {
-        el.style.opacity = '0.3';
-        el.style.filter = 'grayscale(50%)';
-      }
-    } else {
-      el.style.opacity = '1';
-      el.style.filter = 'none';
-    }
-  });
 }
 
 function focusOnNode(nodeId) {
