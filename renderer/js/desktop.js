@@ -50,6 +50,8 @@
       scan: (baseIp, startRange, endRange) => invoke('network_scan', { baseIp, startRange, endRange }),
       arp: () => invoke('network_arp'),
       neighbors: () => invoke('network_neighbors'),
+      enrich: (hosts) => invoke('network_enrich', { hosts }),
+      onEnrichResult: (callback) => subscribe('network-enrich-result', callback),
       onScanProgress: (callback) => subscribe('network-scan-progress', callback)
     },
     image: {

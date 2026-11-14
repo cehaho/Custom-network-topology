@@ -1,6 +1,7 @@
 mod alerts;
 mod config;
 mod export;
+mod enrich;
 mod hosts;
 mod known_hosts;
 mod latency;
@@ -194,6 +195,11 @@ async fn network_neighbors() -> Value {
 }
 
 #[tauri::command]
+async fn network_enrich(app: tauri::AppHandle, hosts: Vec<Value>) -> Value {
+    enrich::enrich(&app, &hosts).await
+}
+
+#[tauri::command]
 async fn monitor_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -254,6 +260,7 @@ pub fn run() {
             network_scan,
             network_arp,
             network_neighbors,
+            network_enrich,
             monitor_start,
             monitor_stop,
             alerts::alerts_notify,
