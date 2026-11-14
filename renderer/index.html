@@ -89,8 +89,8 @@
         <input type="text" id="node-search" placeholder="Search nodes... (Ctrl+F)" spellcheck="false" autocomplete="off"
                title="Name, address or type. Filters: status:down vlan:10 zone:dmz type:server ip:10.0. -type:docker. Enter / arrows: next match, Esc: clear"
                style="padding: 6px 10px 6px 32px; border-radius: 6px; background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; width: 200px; outline: none;">
+        <span id="node-search-count" class="hidden text-xs text-slate-500 font-mono" title="Current match / matches"></span>
       </div>
-      <span id="node-search-count" class="hidden text-xs text-slate-500 font-mono" title="Current match / matches"></span>
       <select id="node-filter-status" style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; outline: none; cursor: pointer;">
         <option value="all">All Status</option>
         <option value="online">Online</option>

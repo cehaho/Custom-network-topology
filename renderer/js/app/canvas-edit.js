@@ -386,8 +386,7 @@ export async function endNodeDrag(e) {
     renderTree(state.config.nodes);
     updateMinimap();
     const container = state.config.nodes.find(n => n.id === droppedOnContainer);
-    // showNotification is not defined anywhere: throws here (unchanged behaviour)
-    showNotification(`Node added to ${container?.name || 'container'}${zoneName}`, 'success');
+    toastSuccess('Container', `Node added to ${container?.name || 'container'}${zoneName}`);
     return;
   }
 

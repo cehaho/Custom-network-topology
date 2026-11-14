@@ -93,14 +93,15 @@ function editNodeFromContext() {
 }
 
 async function pingNodeFromContext() {
-  if (!contextMenuNode || !window.desktopAPI) return;
+  const node = contextMenuNode;
+  if (!node || !window.desktopAPI) return;
   hideContextMenu();
 
-  const result = await window.desktopAPI.network.ping(contextMenuNode.address);
+  const result = await window.desktopAPI.network.ping(node.address);
   if (result.success) {
-    toastSuccess('Ping Successful', `${contextMenuNode.address} responded in ${result.duration}ms`);
+    toastSuccess('Ping Successful', `${node.address} responded in ${result.duration}ms`);
   } else {
-    toastError('Ping Failed', `${contextMenuNode.address} did not respond (${result.duration}ms)`);
+    toastError('Ping Failed', `${node.address} did not respond (${result.duration}ms)`);
   }
 }
 
@@ -133,11 +134,12 @@ function wakeFromContext() {
 }
 
 function showStatusHistoryFromContext() {
-  if (!contextMenuNode) return;
+  const node = contextMenuNode;
+  if (!node) return;
   hideContextMenu();
 
-  const history = statusHistory.get(contextMenuNode.id);
-  const nodeName = contextMenuNode.name || contextMenuNode.id;
+  const history = statusHistory.get(node.id);
+  const nodeName = node.name || node.id;
   const samples = history && Array.isArray(history.history) ? history.history : [];
 
   if (samples.length === 0) {
@@ -160,65 +162,69 @@ function showStatusHistoryFromContext() {
 }
 
 function deleteNodeFromContext() {
-  if (!contextMenuNode) return;
+  const node = contextMenuNode;
+  if (!node) return;
   hideContextMenu();
 
-  if (confirm(`Delete node "${contextMenuNode.name}"?`)) {
+  if (confirm(`Delete node "${node.name}"?`)) {
     // Save state for undo
-    saveStateForUndo(`Delete node "${contextMenuNode.name}"`);
+    saveStateForUndo(`Delete node "${node.name}"`);
 
-    const idx = state.config.nodes.findIndex(n => n.id === contextMenuNode.id);
+    const idx = state.config.nodes.findIndex(n => n.id === node.id);
     if (idx !== -1) {
       // If this is a container, also remove containerId from children
-      if (contextMenuNode.isContainer) {
+      if (node.isContainer) {
         state.config.nodes.forEach(n => {
-          if (n.containerId === contextMenuNode.id) {
+          if (n.containerId === node.id) {
             n.containerId = null;
           }
         });
       }
       // Also remove connections involving this node
       state.config.links = state.config.links.filter(c =>
-        c.sourceNodeId !== contextMenuNode.id && c.targetNodeId !== contextMenuNode.id
+        c.sourceNodeId !== node.id && c.targetNodeId !== node.id
       );
       state.config.nodes.splice(idx, 1);
       saveConfig();
       renderTree(state.config.nodes);
       renderHostList(state.config.nodes);
       updateMinimap();
-      toastSuccess('Node Deleted', `"${contextMenuNode.name}" has been removed`);
+      toastSuccess('Node Deleted', `"${node.name}" has been removed`);
     }
   }
 }
 
 function toggleContainerFromContext() {
-  if (!contextMenuNode || !contextMenuNode.isContainer) return;
+  const node = contextMenuNode;
+  if (!node || !node.isContainer) return;
   hideContextMenu();
-  toggleContainerExpand(contextMenuNode.id);
+  toggleContainerExpand(node.id);
 }
 
 function removeFromContainerFromContext() {
-  if (!contextMenuNode || !contextMenuNode.containerId) return;
+  const node = contextMenuNode;
+  if (!node || !node.containerId) return;
   hideContextMenu();
-  removeFromContainer(contextMenuNode.id);
+  removeFromContainer(node.id);
 }
 
 function addToContainerFromContext(containerId) {
-  if (!contextMenuNode || contextMenuNode.isContainer) return;
+  const node = contextMenuNode;
+  if (!node || node.isContainer) return;
   hideContextMenu();
-  addToContainer(contextMenuNode.id, containerId);
+  addToContainer(node.id, containerId);
 }
 
 // Remove node from container (make it standalone)
 function removeFromContainer(nodeId) {
   const node = state.config.nodes.find(n => n.id === nodeId);
   if (node && node.containerId) {
-    saveUndo(); // not defined anywhere: throws here (unchanged behaviour)
+    saveStateForUndo(`Remove "${node.name}" from container`);
     node.containerId = null;
     node.zoneId = null; // Also clear zone assignment
     renderTree(state.config.nodes);
     saveConfig();
-    showNotification('Node removed from container', 'success');
+    toastSuccess('Container', 'Node removed from container');
   }
 }
 
@@ -227,12 +233,12 @@ function addToContainer(nodeId, containerId, zoneId = null) {
   const node = state.config.nodes.find(n => n.id === nodeId);
   const container = state.config.nodes.find(n => n.id === containerId);
   if (node && container && container.isContainer && !node.isContainer) {
-    saveUndo(); // not defined anywhere: throws here (unchanged behaviour)
+    saveStateForUndo(`Add "${node.name}" to ${container.name}`);
     node.containerId = containerId;
     node.zoneId = zoneId;
     renderTree(state.config.nodes);
     saveConfig();
-    showNotification(`Node added to ${container.name}`, 'success');
+    toastSuccess('Container', `Node added to ${container.name}`);
   }
 }
 

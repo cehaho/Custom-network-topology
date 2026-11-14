@@ -23,8 +23,14 @@ export function focusOnNode(nodeId) {
 
   // Calculate position to center the node
   const viewportRect = getViewport().getBoundingClientRect();
-  const targetX = viewportRect.width / 2 - (node.x / 100 * 10000) * state.scale;
-  const targetY = viewportRect.height / 2 - (node.y / 100 * 10000) * state.scale;
+  // Centre of the node in canvas coordinates. The old code assumed a
+  // 10000 px canvas and pushed the node off screen.
+  // Measured on screen so CSS centring and nested child nodes are handled.
+  const rect = el.getBoundingClientRect();
+  const worldX = (rect.left + rect.width / 2 - viewportRect.left - state.pointX) / state.scale;
+  const worldY = (rect.top + rect.height / 2 - viewportRect.top - state.pointY) / state.scale;
+  const targetX = viewportRect.width / 2 - worldX * state.scale;
+  const targetY = viewportRect.height / 2 - worldY * state.scale;
 
   // Animate pan to node
   const startX = state.pointX;

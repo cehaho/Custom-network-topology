@@ -13,6 +13,7 @@ import { state } from './state.js';
 import { saveConfig } from './io.js';
 import { CanvasSearch } from './search-ui.js';
 import { drawLines } from './canvas-links.js';
+import { saveStateForUndo } from './undo.js';
 
 // Grid System Constants
 const gridCols = [];
@@ -508,8 +509,8 @@ export function renderTree(nodes) {
 export function toggleContainerExpand(nodeId) {
   const node = state.config.nodes.find(n => n.id === nodeId);
   if (node && node.isContainer) {
+    saveStateForUndo(node.expanded ? `Collapse "${node.name}"` : `Expand "${node.name}"`);
     node.expanded = !node.expanded;
-    saveUndo(); // not defined anywhere: throws here (unchanged behaviour)
     renderTree(state.config.nodes);
     saveConfig();
   }
