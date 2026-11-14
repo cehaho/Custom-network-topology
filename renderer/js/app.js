@@ -279,29 +279,11 @@ function drawGridSystem() {
 }
 
 function snapToGrid(x, y) {
-  if (!config.settings.snapToGrid) return { x, y };
-
-  // Snap to 5% grid (matching the visual grid)
-  const gridStep = 5;
-  const offset = 2.5; // Center of grid cell
-
-  const snappedX = Math.round((x - offset) / gridStep) * gridStep + offset;
-  const snappedY = Math.round((y - offset) / gridStep) * gridStep + offset;
-
-  return {
-    x: Math.max(2.5, Math.min(97.5, snappedX)),
-    y: Math.max(2.5, Math.min(247.5, snappedY)) // 50 rows * 5% = 250%, center at 247.5
-  };
+  return TopologyCanvas.snapToGrid(x, y, config.settings.snapToGrid);
 }
 
 function getGridCell(x, y) {
-  const colIndex = Math.floor((x - 0.01) / 5);
-  const rowIndex = Math.floor((y - 0.01) / 5) + 1;
-
-  const col = colIndex >= 0 && colIndex < gridCols.length ? gridCols[colIndex] : '?';
-  const row = rowIndex >= 1 && rowIndex <= 50 ? rowIndex : '?';
-
-  return { col, row };
+  return TopologyCanvas.gridCell(x, y, gridCols);
 }
 
 // ============================================
@@ -312,13 +294,10 @@ function setupEventListeners() {
   // Zoom
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const xs = (e.clientX - pointX) / scale;
-    const ys = (e.clientY - pointY) / scale;
-    const delta = -e.deltaY;
-    scale = delta > 0 ? scale * 1.1 : scale / 1.1;
-    scale = Math.min(Math.max(0.1, scale), 5);
-    pointX = e.clientX - xs * scale;
-    pointY = e.clientY - ys * scale;
+    const next = TopologyCanvas.zoomAt({ scale, pointX, pointY }, e.clientX, e.clientY, e.deltaY);
+    scale = next.scale;
+    pointX = next.pointX;
+    pointY = next.pointY;
     updateTransform();
   });
 
@@ -1002,13 +981,14 @@ function drawLines() {
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', baseColor);
     path.setAttribute('stroke-width', '2');
-    path.setAttribute('stroke-opacity', look.waiting ? '0.28' : '0.45');
-    if (look.waiting) path.setAttribute('stroke-dasharray', '2 7');
+    const stroke = TopologyCanvas.linkStroke(look);
+    path.setAttribute('stroke-opacity', stroke.opacity);
+    if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash);
     path.classList.add('connection-main');
     group.appendChild(path);
 
     // Only the active link, and only while both ends answer, moves.
-    if (look.animate) {
+    if (stroke.animated) {
       const pathFwd = document.createElementNS("http://www.w3.org/2000/svg", "path");
       pathFwd.setAttribute('d', d);
       pathFwd.setAttribute('fill', 'none');
@@ -1041,21 +1021,15 @@ function drawLines() {
     svg.appendChild(group);
 
     // Draw link speed/type label if available
-    if (conn.medium || conn.speed) {
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
-
-      let labelParts = [];
-      if (conn.medium) labelParts.push(conn.medium);
-      if (conn.speed) labelParts.push(conn.speed);
-      const labelText = labelParts.join(' ');
+    const labelText = TopologyCanvas.linkLabel(conn);
+    if (labelText) {
+      const box = TopologyCanvas.labelBox(x1, y1, x2, y2, labelText);
 
       const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      const textWidth = labelText.length * 6 + 8;
-      textBg.setAttribute('x', midX - textWidth / 2);
-      textBg.setAttribute('y', midY - 8);
-      textBg.setAttribute('width', textWidth);
-      textBg.setAttribute('height', 16);
+      textBg.setAttribute('x', box.x);
+      textBg.setAttribute('y', box.y);
+      textBg.setAttribute('width', box.width);
+      textBg.setAttribute('height', box.height);
       textBg.setAttribute('rx', 4);
       textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
       textBg.setAttribute('stroke', baseColor);
@@ -1063,8 +1037,8 @@ function drawLines() {
       svg.appendChild(textBg);
 
       const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      text.setAttribute('x', midX);
-      text.setAttribute('y', midY + 4);
+      text.setAttribute('x', box.textX);
+      text.setAttribute('y', box.textY);
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('fill', '#e2e8f0');
       text.setAttribute('font-size', '10');
@@ -1094,67 +1068,14 @@ function getPortPosition(nodeEl, port, node) {
     }
   }
 
-  // Fallback: calculate based on node position
-  const nodeW = nodeEl.offsetWidth;
-  const nodeH = nodeEl.offsetHeight;
-
-  // Node center (offsetLeft/Top is already the center due to CSS transform)
-  const nodeX = nodeEl.offsetLeft;
-  const nodeY = nodeEl.offsetTop;
-
-  // Get port index for positioning multiple ports on same side
-  const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
-  const portIndex = samePortSide.findIndex(p => p.id === port?.id);
-  const portCount = samePortSide.length;
-
-  // Calculate offset for multiple ports (spread them out) - match CSS percentages
-  let offsetPercent = 50;
-  if (portCount > 1) {
-    // CSS uses 30%, 50%, 70% for 3 ports
-    const positions = portCount === 2 ? [35, 65] :
-                      portCount === 3 ? [30, 50, 70] :
-                      Array.from({length: portCount}, (_, i) => 20 + (60 * i / (portCount - 1)));
-    offsetPercent = positions[portIndex] || 50;
-  }
-
-  const side = port?.side || 'bottom';
-  switch (side) {
-    case 'top':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY - nodeH / 2 };
-    case 'bottom':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY + nodeH / 2 };
-    case 'left':
-      return { x: nodeX - nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    case 'right':
-      return { x: nodeX + nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    default:
-      return { x: nodeX, y: nodeY };
-  }
+  // Fallback: node box from layout (offsetLeft/Top is the centre due to CSS transform)
+  const box = { x: nodeEl.offsetLeft, y: nodeEl.offsetTop, width: nodeEl.offsetWidth, height: nodeEl.offsetHeight };
+  return TopologyCanvas.portAnchor(box, node.ports || [], port);
 }
 
 // Create a bezier path between two points, considering port sides
 function createBezierPath(x1, y1, x2, y2, sourceSide, targetSide) {
-  const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-  const curvature = Math.min(distance * 0.5, 100);
-
-  let cx1 = x1, cy1 = y1, cx2 = x2, cy2 = y2;
-
-  // Adjust control points based on port sides
-  switch (sourceSide) {
-    case 'top': cy1 = y1 - curvature; break;
-    case 'bottom': cy1 = y1 + curvature; break;
-    case 'left': cx1 = x1 - curvature; break;
-    case 'right': cx1 = x1 + curvature; break;
-  }
-
-  switch (targetSide) {
-    case 'top': cy2 = y2 - curvature; break;
-    case 'bottom': cy2 = y2 + curvature; break;
-    case 'left': cx2 = x2 - curvature; break;
-    case 'right': cx2 = x2 + curvature; break;
-  }
-
-  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+  return TopologyCanvas.bezierPath(x1, y1, x2, y2, sourceSide, targetSide);
 }
 
 // ============================================
@@ -3203,93 +3124,18 @@ function autoLayoutNodes() {
   // Save state for undo
   saveStateForUndo('Auto-layout nodes');
 
-  // Build adjacency map from connections
-  const connections = config.links || [];
-  const adjacency = new Map();
-
+  const layout = TopologyCanvas.autoLayout(config.nodes, config.links);
   config.nodes.forEach(node => {
-    adjacency.set(node.id, new Set());
-  });
-
-  connections.forEach(conn => {
-    if (adjacency.has(conn.sourceNodeId) && adjacency.has(conn.targetNodeId)) {
-      adjacency.get(conn.sourceNodeId).add(conn.targetNodeId);
-      adjacency.get(conn.targetNodeId).add(conn.sourceNodeId);
+    const position = layout.positions.get(node.id);
+    if (position) {
+      node.x = position.x;
+      node.y = position.y;
     }
-  });
-
-  // Find root nodes (nodes with no incoming connections or most connections)
-  let rootNodes = config.nodes.filter(node => {
-    const incoming = connections.filter(c => c.targetNodeId === node.id).length;
-    return incoming === 0;
-  });
-
-  if (rootNodes.length === 0) {
-    // No clear root, use the node with most connections
-    rootNodes = [config.nodes.reduce((best, node) => {
-      const conns = adjacency.get(node.id)?.size || 0;
-      const bestConns = adjacency.get(best.id)?.size || 0;
-      return conns > bestConns ? node : best;
-    }, config.nodes[0])];
-  }
-
-  // BFS to assign levels
-  const levels = new Map();
-  const visited = new Set();
-  let queue = rootNodes.map(n => ({ id: n.id, level: 0 }));
-
-  while (queue.length > 0) {
-    const { id, level } = queue.shift();
-    if (visited.has(id)) continue;
-    visited.add(id);
-    levels.set(id, level);
-
-    const neighbors = adjacency.get(id) || new Set();
-    neighbors.forEach(neighborId => {
-      if (!visited.has(neighborId)) {
-        queue.push({ id: neighborId, level: level + 1 });
-      }
-    });
-  }
-
-  // Handle disconnected nodes
-  config.nodes.forEach(node => {
-    if (!levels.has(node.id)) {
-      levels.set(node.id, 0);
-    }
-  });
-
-  // Group nodes by level
-  const nodesByLevel = new Map();
-  levels.forEach((level, nodeId) => {
-    if (!nodesByLevel.has(level)) {
-      nodesByLevel.set(level, []);
-    }
-    nodesByLevel.get(level).push(nodeId);
-  });
-
-  // Position nodes
-  const levelSpacing = 15; // vertical spacing in %
-  const startY = 10;
-  const startX = 50; // center
-
-  nodesByLevel.forEach((nodeIds, level) => {
-    const count = nodeIds.length;
-    const totalWidth = count * 12; // spacing between nodes in %
-    const startXForLevel = startX - totalWidth / 2 + 6;
-
-    nodeIds.forEach((nodeId, idx) => {
-      const node = config.nodes.find(n => n.id === nodeId);
-      if (node) {
-        node.x = Math.max(5, Math.min(95, startXForLevel + idx * 12));
-        node.y = Math.max(5, Math.min(95, startY + level * levelSpacing));
-      }
-    });
   });
 
   saveConfig();
   renderTree(config.nodes);
-  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${nodesByLevel.size} levels`);
+  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${layout.levelCount} levels`);
 }
 
 // ============================================
@@ -3680,15 +3526,8 @@ function highlightNodesInRect(rectX, rectY, rectW, rectH) {
     const node = config.nodes.find(n => n.id === nodeId);
     if (!node) return;
 
-    // Calculate node position in world pixels
-    const worldWidth = window.innerWidth;
-    const worldHeight = window.innerHeight;
-    const nodeX = (node.x / 100) * worldWidth;
-    const nodeY = (node.y / 100) * worldHeight;
-
-    // Check if node is inside rect
-    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
-                     nodeY >= rectY && nodeY <= rectY + rectH;
+    const rect = { x: rectX, y: rectY, width: rectW, height: rectH };
+    const isInside = TopologyCanvas.nodeInRect(node, rect, window.innerWidth, window.innerHeight);
 
     if (isInside) {
       el.classList.add('selected');
@@ -3699,20 +3538,9 @@ function highlightNodesInRect(rectX, rectY, rectW, rectH) {
 }
 
 function selectNodesInRect(rectX, rectY, rectW, rectH) {
-  const worldWidth = window.innerWidth;
-  const worldHeight = window.innerHeight;
-
-  config.nodes.forEach(node => {
-    const nodeX = (node.x / 100) * worldWidth;
-    const nodeY = (node.y / 100) * worldHeight;
-
-    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
-                     nodeY >= rectY && nodeY <= rectY + rectH;
-
-    if (isInside) {
-      selectedNodes.add(node.id);
-    }
-  });
+  const rect = { x: rectX, y: rectY, width: rectW, height: rectH };
+  TopologyCanvas.nodesInRect(config.nodes, rect, window.innerWidth, window.innerHeight)
+    .forEach(id => selectedNodes.add(id));
 
   updateSelectionVisuals();
 
@@ -3881,13 +3709,13 @@ function initMinimap() {
     const worldWidth = window.innerWidth * 3; // 300% of viewport
     const worldHeight = window.innerHeight * 3;
 
-    const worldX = (clickX / minimapWidth) * worldWidth;
-    const worldY = (clickY / minimapHeight) * worldHeight;
+    const target = TopologyCanvas.minimapToWorld(clickX, clickY, minimapWidth, minimapHeight, worldWidth, worldHeight);
 
     // Center viewport on this position
     const viewportRect = viewport.getBoundingClientRect();
-    pointX = viewportRect.width / 2 - worldX * scale;
-    pointY = viewportRect.height / 2 - worldY * scale;
+    const centred = TopologyCanvas.centerOn(target.x, target.y, viewportRect.width, viewportRect.height, scale);
+    pointX = centred.pointX;
+    pointY = centred.pointY;
 
     updateTransform();
     updateMinimap();
@@ -3925,80 +3753,37 @@ function updateMinimap() {
   canvas.width = minimapWidth;
   canvas.height = minimapHeight;
 
-  // Clear canvas
   const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-  ctx.fillStyle = isDark ? '#1e293b' : '#f1f5f9';
-  ctx.fillRect(0, 0, minimapWidth, minimapHeight);
-
-  // World dimensions (300% of viewport)
-  const worldWidth = window.innerWidth * 3;
-  const worldHeight = window.innerHeight * 3;
-
-  // Scale factor for minimap
-  const scaleX = minimapWidth / worldWidth;
-  const scaleY = minimapHeight / worldHeight;
-
-  // Draw connections. Color follows the ends and the active choice.
-  ctx.lineWidth = 1;
-
-  config.links.forEach(conn => {
-    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
-    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
-    if (!sourceNode || !targetNode) return;
-
-    const x1 = (sourceNode.x / 100) * window.innerWidth * scaleX;
-    const y1 = (sourceNode.y / 100) * window.innerHeight * scaleY;
-    const x2 = (targetNode.x / 100) * window.innerWidth * scaleX;
-    const y2 = (targetNode.y / 100) * window.innerHeight * scaleY;
-    const look = linkAppearance(conn, displayedNodes());
-
-    ctx.beginPath();
-    ctx.strokeStyle = look.color;
-    ctx.globalAlpha = look.waiting ? 0.35 : 0.75;
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+  const shown = displayedNodes();
+  TopologyCanvas.drawMinimap(ctx, {
+    width: minimapWidth,
+    height: minimapHeight,
+    dark: isDark,
+    nodes: config.nodes,
+    links: config.links,
+    // Color follows the ends and the active choice.
+    lookFor: conn => linkAppearance(conn, shown),
+    colorFor: node => {
+      const live = networkData.find(n => n.id === node.id) || node;
+      return TopologyCanvas.minimapNodeColor(selectedNodes.has(node.id), statusView(live.status).state);
+    }
   });
 
-  // Draw nodes
-  config.nodes.forEach(node => {
-    const x = (node.x / 100) * window.innerWidth * scaleX;
-    const y = (node.y / 100) * window.innerHeight * scaleY;
-
-    // Node color based on status
-    const live = networkData.find(n => n.id === node.id) || node;
-    const view = statusView(live.status);
-
-    ctx.fillStyle = selectedNodes.has(node.id) ? '#3b82f6' :
-                    view.state === 'up' ? '#22c55e' :
-                    view.state === 'down' ? '#ef4444' : '#94a3b8';
-
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Update viewport indicator
   if (viewportIndicator) {
     const viewportRect = viewport.getBoundingClientRect();
-
-    // Calculate visible area in world coordinates
-    const visibleX = -pointX / scale;
-    const visibleY = -pointY / scale;
-    const visibleWidth = viewportRect.width / scale;
-    const visibleHeight = viewportRect.height / scale;
-
-    // Convert to minimap coordinates
-    const indicatorX = visibleX * scaleX;
-    const indicatorY = visibleY * scaleY;
-    const indicatorW = visibleWidth * scaleX;
-    const indicatorH = visibleHeight * scaleY;
-
-    viewportIndicator.style.left = Math.max(0, indicatorX) + 'px';
-    viewportIndicator.style.top = Math.max(0, indicatorY) + 'px';
-    viewportIndicator.style.width = Math.min(minimapWidth - indicatorX, indicatorW) + 'px';
-    viewportIndicator.style.height = Math.min(minimapHeight - indicatorY, indicatorH) + 'px';
+    const box = TopologyCanvas.minimapIndicator(
+      { scale, pointX, pointY },
+      viewportRect.width,
+      viewportRect.height,
+      window.innerWidth * TopologyCanvas.WORLD_FACTOR,
+      window.innerHeight * TopologyCanvas.WORLD_FACTOR,
+      minimapWidth,
+      minimapHeight
+    );
+    viewportIndicator.style.left = box.left + 'px';
+    viewportIndicator.style.top = box.top + 'px';
+    viewportIndicator.style.width = box.width + 'px';
+    viewportIndicator.style.height = box.height + 'px';
   }
 }
 

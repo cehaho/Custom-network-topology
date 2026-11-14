@@ -69,6 +69,7 @@ Custom-network-topology/
 │       ├── desktop.js      # window.electronAPI branché sur Tauri
 │       ├── topology.js     # Document de topologie partagé
 │       ├── probe.js        # Confirmation d’état et lien actif
+│       ├── canvas.js       # Géométrie du canevas (grille, zoom, liens, mini-carte)
 │       ├── admin.js        # Tableau Admin
 │       └── app.js          # Canevas, SSH, découverte, UI de supervision
 ├── scripts/
@@ -146,13 +147,15 @@ npm test
 
 Couvre la validation des hôtes, le document de topologie, la confirmation de sonde / lien actif, et le traitement des secrets (côté JS et Rust selon les modules).
 
+`test/canvas.test.js` couvre la géométrie du canevas, isolée dans `renderer/js/canvas.js` : magnétisme de la grille, zoom autour du curseur et pan, sélection rectangulaire, position des ports, tracé des liens (courbes de Bézier, étiquettes, style selon la sonde), mise en page automatique, et dessin de la mini-carte sur un contexte 2D factice qui enregistre les appels.
+
 ## Limites
 
 - Découverte et supervision en IPv4 uniquement.
 - Tailwind et Lucide sont chargés depuis Internet. Sans réseau, la page n’a ni styles utilitaires ni icônes.
 - `xterm` 5 et `xterm-addon-fit` 0.8 sont les paquets contre lesquels cette UI a été écrite. Les deux noms sont dépréciés en amont au profit de `@xterm/xterm` et `@xterm/addon-fit`.
 - Le SSH accepte la clé d’hôte du serveur sans la mémoriser. Pas de contrôle known-hosts dans cette version.
-- Pas de test automatisé du canevas. `npm test` ne couvre pas l’UI graphique.
+- Le canevas n’est testé que par sa géométrie. Le rendu DOM/SVG réel, les événements souris (glisser, déposer dans un conteneur, création de lien) et l’aspect visuel ne sont pas testés automatiquement.
 
 ## Licence
 
