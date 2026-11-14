@@ -8,6 +8,7 @@
   let dirty = false;
   let root = null;
   let importToken = null;
+  const openProbes = new Set();
 
   function current() {
     return hooks && hooks.getDocument ? hooks.getDocument() : standaloneDocument;
@@ -237,6 +238,7 @@
             <input data-field="address" data-index="${index}" value="${escapeHtml(host.address)}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-40 text-sm font-mono" placeholder="IPv4 / IPv6">
             <input data-field="port" data-index="${index}" value="${host.port || ''}" class="bg-slate-900 border border-slate-600 rounded px-2 py-2 w-16 text-sm font-mono" placeholder="Port">
           </div>
+          ${probeEditor(host, index)}
         </td>
         <td class="p-3 align-top">
           <div class="flex flex-col gap-2">
@@ -291,6 +293,12 @@
     tbody.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', onAction);
     });
+    tbody.querySelectorAll('details[data-probe-id]').forEach((details) => {
+      details.addEventListener('toggle', () => {
+        if (details.open) openProbes.add(details.dataset.probeId);
+        else openProbes.delete(details.dataset.probeId);
+      });
+    });
     const sshCount = doc.nodes.filter((node) => node.sshUser).length;
     const roots = doc.nodes.filter((node) => !Topology.parentNodeId(doc, node.id, 'primary')).length;
     const failoverCount = doc.nodes.filter((node) => Topology.parentNodeId(doc, node.id, 'failover')).length;
@@ -318,6 +326,54 @@
     return `<select data-field="${field}" data-index="${index}" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs">${options}</select>`;
   }
 
+  // Compact editor for `node.probe` (see probe-checks.js). Every check
+  // targets the node address; a probe replaces the default ping / port probe.
+  function probeEditor(host, index) {
+    if (!window.ProbeChecks) return '';
+    const form = ProbeChecks.toForm(host.probe);
+    const label = ProbeChecks.summary(host.probe) || 'default (ping / port)';
+    const input = 'bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono';
+    const field = (name) => `data-field="probe:${name}" data-index="${index}"`;
+    const option = (value, text, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${text}</option>`;
+    return `
+      <details data-probe-id="${escapeHtml(host.id)}" ${openProbes.has(host.id) ? 'open' : ''} class="mt-2 text-[10px] text-slate-400">
+        <summary class="cursor-pointer select-none" title="A check list replaces the default ping / port probe. The node is up only when every check passes.">Checks: ${escapeHtml(label)}</summary>
+        <div class="flex flex-col gap-1 mt-1 w-60">
+          <label class="flex items-center gap-1"><input type="checkbox" ${field('ping')} ${form.ping ? 'checked' : ''}> Ping</label>
+          <div class="flex gap-1">
+            <input ${field('tcpPorts')} value="${escapeHtml(form.tcpPorts)}" class="${input} flex-1 min-w-0" placeholder="TCP ports 22,443">
+            <select ${field('tcpMode')} class="${input}" title="All ports must answer, or any one">${option('all', 'All', form.tcpMode)}${option('any', 'Any', form.tcpMode)}</select>
+          </div>
+          <div class="flex gap-1">
+            <select ${field('httpScheme')} class="${input}">${option('', 'No HTTP', form.httpScheme)}${option('http', 'HTTP', form.httpScheme)}${option('https', 'HTTPS', form.httpScheme)}</select>
+            <input ${field('httpPort')} value="${escapeHtml(form.httpPort)}" class="${input} w-14" placeholder="Port">
+            <input ${field('httpPath')} value="${escapeHtml(form.httpPath)}" class="${input} flex-1 min-w-0" placeholder="/path">
+          </div>
+          <div class="flex gap-1 items-center">
+            <input ${field('httpStatus')} value="${escapeHtml(form.httpStatus)}" class="${input} w-20" placeholder="200-399" title="Expected HTTP status or range">
+            <label class="flex items-center gap-1" title="Accept self-signed or invalid certificates (HTTPS only)"><input type="checkbox" ${field('httpInsecure')} ${form.httpInsecure ? 'checked' : ''}> Skip TLS verify</label>
+          </div>
+          <div class="flex gap-1">
+            <input ${field('dnsName')} value="${escapeHtml(form.dnsName)}" class="${input} flex-1 min-w-0" placeholder="DNS name to resolve" title="Query this node as a DNS server">
+            <select ${field('dnsType')} class="${input}">${option('A', 'A', form.dnsType)}${option('AAAA', 'AAAA', form.dnsType)}</select>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  function onProbeField(host, key, target) {
+    const form = ProbeChecks.toForm(host.probe);
+    form[key] = target.type === 'checkbox' ? target.checked : target.value;
+    const result = ProbeChecks.fromForm(form, host.probe);
+    if (!result.ok) {
+      showToast('Checks: ' + result.error, 'error');
+      return false;
+    }
+    if (result.probe) host.probe = result.probe;
+    else delete host.probe;
+    return true;
+  }
+
   function secretLine(host, index) {
     const hint = Topology.secretHint(host);
     if (!hint) return '';
@@ -334,7 +390,9 @@
     const host = doc.nodes[index];
     if (!host) return;
     let value = event.target.value;
-    if (field === 'primary' || field === 'failover') {
+    if (field.indexOf('probe:') === 0) {
+      if (!window.ProbeChecks || !onProbeField(host, field.slice(6), event.target)) return;
+    } else if (field === 'primary' || field === 'failover') {
       Topology.setParent(doc, host.id, field === 'primary' ? 'primary' : 'failover', value || null);
     } else if (field === 'medium' || field === 'speed') {
       const cable = Topology.primaryCable(doc, host.id);

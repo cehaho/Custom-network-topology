@@ -215,6 +215,7 @@ function openAdminPanel() {
           node.name = configNode.name;
           node.address = configNode.address;
           node.port = configNode.port;
+          node.probe = configNode.probe;
           node.icon = configNode.icon;
           node.iconType = configNode.iconType;
           node.ports = configNode.ports;
@@ -536,8 +537,10 @@ function statusView(status) {
 
 function statusLabel(node, statusById, view) {
   const active = Probe.activeLink(config.links, node.id, statusById);
-  if (active && active.role === 'failover') return view.label + ' · FAILOVER';
-  return view.label;
+  const label = active && active.role === 'failover' ? view.label + ' · FAILOVER' : view.label;
+  // `probeDetail` names the check that failed (or passed) for a node with a `probe`.
+  if (node.probeDetail) return `<span title="${escapeHtml(node.probeDetail)}">${label}</span>`;
+  return label;
 }
 
 function linkAppearance(conn, nodes) {
@@ -1592,7 +1595,7 @@ function renderHostList(nodes) {
     const statusColor = view.text;
 
     html += `
-      <div class="host-row" data-node-id="${node.id}">
+      <div class="host-row" data-node-id="${node.id}"${node.probeDetail ? ` title="${escapeHtml(node.probeDetail)}"` : ''}>
         <div class="flex items-center">
           <div class="status-dot ${colorClass}"></div>
           <div class="flex flex-col">
@@ -2686,6 +2689,7 @@ async function saveNode() {
   delete nodeData.uptime;
   delete nodeData.level;
   delete nodeData.responseTime;
+  delete nodeData.probeDetail;
   delete nodeData.sshPass;
   delete nodeData.sshPassphrase;
   delete nodeData._encrypted;
@@ -3119,6 +3123,7 @@ function setupMonitoringListener() {
       const copy = Object.assign({}, configNode);
       copy.status = entry ? entry.status : 'unknown';
       copy.responseTime = entry && entry.responseTime != null ? entry.responseTime : null;
+      copy.probeDetail = entry && typeof entry.detail === 'string' ? entry.detail : '';
       delete copy.activeParentId;
       const secretType = Topology.secretType(copy);
       if (secretType) copy.sshSecret = { type: secretType };
@@ -3154,7 +3159,8 @@ async function startMonitoring() {
     nodes: (config.nodes || []).map((node) => ({
       id: node.id,
       address: typeof node.address === 'string' ? node.address : '',
-      port: node.port == null || node.port === '' ? null : node.port
+      port: node.port == null || node.port === '' ? null : node.port,
+      probe: node.probe || null
     })),
     interval: Probe.monitoringInterval(settings.probeIntervalMs),
     confirmations: Probe.confirmationCount(settings.confirmations)

@@ -30,6 +30,7 @@ struct Measured {
     response_time: Option<u64>,
     /// Round-trip time of this probe in ms; `None` when it failed.
     rtt: Option<f64>,
+    detail: Option<String>,
 }
 
 pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
@@ -72,6 +73,13 @@ pub fn start(app: AppHandle, config: Value) -> JoinHandle<()> {
                 let mut entry = public_node(&sample.id, slot.state, sample.response_time, entries);
                 with_latency(&mut entry, sample.online, sample.rtt);
                 public.push(entry);
+                // Which check failed (or passed), for a node with a `probe`.
+                if let (Some(detail), Some(item)) = (
+                    &sample.detail,
+                    public.last_mut().and_then(Value::as_object_mut),
+                ) {
+                    item.insert("detail".to_string(), json!(detail));
+                }
             }
             let before = history.len();
             history.retain(|id, _| seen.contains(id));
@@ -158,8 +166,33 @@ async fn measure_one(node: Value) -> Measured {
             online: None,
             response_time: None,
             rtt: None,
+            detail: None,
         };
     };
+    // A `probe` object replaces the default ping / TCP probe.
+    match crate::probe_kinds::plan(object) {
+        crate::probe_kinds::RichPlan::Default => {}
+        crate::probe_kinds::RichPlan::Skip => {
+            return Measured {
+                id,
+                online: None,
+                response_time: None,
+                rtt: None,
+                detail: None,
+            };
+        }
+        crate::probe_kinds::RichPlan::Run(host, checks) => {
+            let outcome = crate::probe_kinds::run(&host, &checks).await;
+            return Measured {
+                id,
+                online: Some(outcome.online),
+                response_time: Some(outcome.elapsed_ms),
+                // Rich checks run in parallel; their wall time stands in for RTT.
+                rtt: outcome.online.then_some(outcome.elapsed_ms as f64),
+                detail: Some(outcome.detail),
+            };
+        }
+    }
     // `plan_probe` drops an unsafe address. Nothing below builds a command
     // string from it: ping receives argv, TCP receives a socket address.
     let Some(plan) = plan_probe(object) else {
@@ -168,6 +201,7 @@ async fn measure_one(node: Value) -> Measured {
             online: None,
             response_time: None,
             rtt: None,
+            detail: None,
         };
     };
     match plan {
@@ -183,6 +217,7 @@ async fn measure_one(node: Value) -> Measured {
                 online: Some(result.online),
                 response_time: Some(rtt.map_or(result.duration_ms, |ms| ms.round() as u64)),
                 rtt,
+                detail: None,
             }
         }
         ProbePlan::Tcp { host, port } => {
@@ -194,6 +229,7 @@ async fn measure_one(node: Value) -> Measured {
                 online: Some(online),
                 response_time: Some(elapsed.as_millis() as u64),
                 rtt: online.then(|| elapsed.as_secs_f64() * 1000.0),
+                detail: None,
             }
         }
     }

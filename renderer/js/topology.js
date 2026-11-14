@@ -14,7 +14,7 @@
 
   const SCHEMA_VERSION = 1;
   const DOCUMENT_KEYS = ['schemaVersion', 'settings', 'nodes', 'links', 'ports'];
-  const RUNTIME_FIELDS = ['status', 'uptime', 'activeParentId', 'level', 'responseTime'];
+  const RUNTIME_FIELDS = ['status', 'uptime', 'activeParentId', 'level', 'responseTime', 'probeDetail'];
   const PARENT_FIELDS = ['primaryParentId', 'secondaryParentId'];
 
   function emptyDocument() {
@@ -52,15 +52,48 @@
     return typeof value === 'string' ? value : '';
   }
 
+  // Per-node probe rules live in probe-checks.js (loaded before this file).
+  function probeChecks() {
+    if (typeof module === 'object' && module.exports && typeof require === 'function') {
+      return require('./probe-checks.js');
+    }
+    return globalThis.ProbeChecks || null;
+  }
+
+  function probeError(nodes) {
+    const checks = probeChecks();
+    if (!checks) return '';
+    for (let index = 0; index < nodes.length; index += 1) {
+      const error = checks.nodeError(nodes[index]);
+      if (error) return error;
+    }
+    return '';
+  }
+
+  function normalizeNodeProbe(node) {
+    const checks = probeChecks();
+    if (!checks || !Object.prototype.hasOwnProperty.call(node, 'probe')) return false;
+    const result = checks.normalize(node.probe);
+    if (result.ok && result.probe) {
+      const same = JSON.stringify(result.probe) === JSON.stringify(node.probe);
+      node.probe = result.probe;
+      return !same;
+    }
+    delete node.probe;
+    return true;
+  }
+
   function validateIncoming(raw) {
     if (Array.isArray(raw)) {
       if (!raw.every(isObject)) return 'Configuration nodes must be objects';
-      return '';
+      return probeError(raw);
     }
     if (!isObject(raw)) return 'Configuration must be a JSON object';
     if (!Object.prototype.hasOwnProperty.call(raw, 'nodes')) return 'Configuration has no nodes';
     if (!Array.isArray(raw.nodes)) return 'Configuration nodes must be an array';
     if (!raw.nodes.every(isObject)) return 'Configuration nodes must be objects';
+    const nodeProbeError = probeError(raw.nodes);
+    if (nodeProbeError) return nodeProbeError;
     if (raw.schemaVersion !== undefined && raw.schemaVersion !== SCHEMA_VERSION) {
       return 'Unsupported topology version: ' + String(raw.schemaVersion);
     }
@@ -117,6 +150,7 @@
       if (!Array.isArray(node.ports) || node.ports.length === 0) changed = true;
       ensureDefaultPorts(node);
       if (normalizeActionFields(node)) changed = true;
+      if (normalizeNodeProbe(node)) changed = true;
       node.ports = node.ports.map(normalizePort).filter(Boolean);
     });
 
@@ -529,7 +563,7 @@
           { id: id + '_out', name: 'OUT', side: 'bottom' }
         ]
     };
-    ['isContainer', 'containerType', 'zones', 'containerId', 'zoneId', 'expanded'].forEach((key) => {
+    ['isContainer', 'containerType', 'zones', 'containerId', 'zoneId', 'expanded', 'probe'].forEach((key) => {
       if (source[key] !== undefined) node[key] = source[key];
     });
     Object.keys(ACTION_FIELDS).forEach((key) => {

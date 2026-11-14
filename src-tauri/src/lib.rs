@@ -9,6 +9,7 @@ mod latency;
 mod known_hosts_admin;
 mod monitor;
 mod probe;
+mod probe_kinds;
 mod network;
 mod secrets;
 mod ssh;
