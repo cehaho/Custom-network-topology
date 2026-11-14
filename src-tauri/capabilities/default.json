@@ -29,6 +29,9 @@
     "allow-monitor-start",
     "allow-monitor-stop",
     "allow-alerts-notify",
-    "allow-image-export"
+    "allow-image-export",
+    "allow-actions-open-web",
+    "allow-actions-traceroute",
+    "allow-actions-wake"
   ]
 }

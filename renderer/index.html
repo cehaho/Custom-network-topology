@@ -1142,6 +1142,19 @@
           + Add Port
         </button>
       </div>
+      <div class="form-group">
+        <label class="form-label">Quick Actions (optional)</label>
+        <div class="grid grid-cols-2 gap-2">
+          <input type="text" id="node-mac" class="form-input" placeholder="MAC (aa:bb:cc:dd:ee:ff)" autocomplete="off">
+          <input type="text" id="node-wol-broadcast" class="form-input" placeholder="WoL broadcast (255.255.255.255)" autocomplete="off">
+          <select id="node-web-scheme" class="form-input">
+            <option value="">Web scheme (auto)</option>
+            <option value="http">http</option>
+            <option value="https">https</option>
+          </select>
+          <input type="number" id="node-web-port" class="form-input" placeholder="Web port (e.g. 8080)" min="1" max="65535">
+        </div>
+      </div>
       <input type="hidden" id="node-edit-id">
     </div>
     <div class="modal-footer">
@@ -1165,6 +1178,22 @@
   <div class="context-menu-item" onclick="pingNodeFromContext()">
     <i data-lucide="activity" class="w-4 h-4"></i>
     <span>Ping</span>
+  </div>
+  <div id="context-traceroute" class="context-menu-item" onclick="tracerouteFromContext()">
+    <i data-lucide="route" class="w-4 h-4"></i>
+    <span>Traceroute</span>
+  </div>
+  <div id="context-copy-address" class="context-menu-item" onclick="copyAddressFromContext()">
+    <i data-lucide="copy" class="w-4 h-4"></i>
+    <span>Copy Address</span>
+  </div>
+  <div id="context-open-web" class="context-menu-item" onclick="openWebFromContext()">
+    <i data-lucide="globe" class="w-4 h-4"></i>
+    <span>Open Web UI</span>
+  </div>
+  <div id="context-wake" class="context-menu-item hidden" onclick="wakeFromContext()">
+    <i data-lucide="power" class="w-4 h-4"></i>
+    <span>Wake-on-LAN</span>
   </div>
   <div class="context-menu-item" onclick="showStatusHistoryFromContext()">
     <i data-lucide="clock" class="w-4 h-4"></i>
@@ -1195,6 +1224,22 @@
   </div>
 </div>
 
+<!-- Traceroute -->
+<div id="traceroute-modal" class="modal-overlay hidden">
+  <div class="modal" style="width: 720px;">
+    <div class="modal-header">
+      <h3><i data-lucide="route" class="w-5 h-5 inline mr-2"></i><span id="traceroute-title">Traceroute</span></h3>
+      <button onclick="closeModal('traceroute-modal')" class="text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="traceroute-status" class="text-xs text-slate-400 mb-2"></p>
+      <pre id="traceroute-output" class="text-xs font-mono whitespace-pre overflow-auto p-3 rounded" style="max-height: 60vh; background: rgba(0,0,0,0.3); color: var(--text-primary);"></pre>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div id="toast-container" class="toast-container"></div>
 <div id="admin-root"></div>
@@ -1214,6 +1259,7 @@
 <script src="js/alert-notifier.js"></script>
 <script src="js/known-hosts-admin.js"></script>
 <script src="js/admin.js"></script>
+<script src="js/actions.js"></script>
 <script src="js/app.js"></script>
 <script src="js/history.js"></script>
 <script src="js/latency-ui.js"></script>

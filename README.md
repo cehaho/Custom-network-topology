@@ -48,6 +48,15 @@ npm start
 - Import et export de la topologie en JSON. Un export **ne contient aucun** mot de passe ni passphrase de clé. Il indique seulement, sur chaque nœud, si un secret existe et s’il s’agit d’un mot de passe ou d’une passphrase (`sshSecret.type`).
 - **Export image** (bouton *Image*) : PNG (échelle 1x ou 2x) ou SVG autonome, sur fond sombre ou clair. Le SVG contient nœuds, libellés, liens, conteneurs et zones VLAN, avec styles embarqués, sans script ni ressource externe ; les icônes Lucide et SVG sont recopiées après filtrage, une icône URL est remplacée par l’initiale du nœud. Le PNG est rastérisé depuis ce SVG. L’écriture passe par la commande `image_export` et la boîte « Enregistrer sous » du système : le contenu est vérifié (signature PNG, SVG sans contenu actif) et l’extension `.png` / `.svg` est imposée. La construction du SVG est dans `renderer/js/export.js`.
 
+## Actions rapides (clic droit sur un nœud)
+
+- **Copy Address** copie l’adresse du nœud (sans crochets) dans le presse-papiers (`navigator.clipboard`, avec repli `execCommand('copy')`).
+- **Open Web UI** ouvre `http(s)://adresse[:port]/` dans le navigateur du système (`tauri-plugin-opener`). L’URL est reconstruite côté Rust (`src-tauri/src/actions.rs`) à partir de l’adresse validée : seuls `http` et `https` sont possibles, une IPv6 est mise entre crochets (zone écrite `%25zone`). Champs optionnels du nœud : `webUrlScheme` (`http`/`https`, sinon `https` pour les ports 443 et 8443, `http` ailleurs) et `webPort` (1–65535). La fenêtre n’a pas la permission générique `opener:*`.
+- **Traceroute** lance `traceroute -n -m 30 -w 2 -q 3` (Linux ; `-6` pour une IPv6, repli sans `-n` puis `traceroute6` pour le traceroute GNU inetutils), `traceroute`/`traceroute6` (macOS, BSD) ou `tracert -d -h 30 -w 2000` (Windows, `-6` en IPv6). L’hôte passe par `normalize_host` et est un argument séparé, sans shell. Arrêt forcé après 30 s ; la sortie déjà lue est renvoyée. Les sauts sont analysés en `{hop, address, rtts}` (`*` → `null`, `<1 ms` → 1) et affichés dans une fenêtre.
+- **Wake-on-LAN** (visible si le nœud a une `mac`) envoie un paquet magique UDP (6 × `0xFF` puis 16 × la MAC, 102 octets) sur le port 9, vers `255.255.255.255` ou l’adresse IPv4 `wolBroadcast` du nœud (par ex. `192.168.1.255`). La MAC est acceptée sous la forme `aa:bb:cc:dd:ee:ff`, `aa-bb-…`, `aabb.ccdd.eeff` ou `aabbccddeeff`, et enregistrée en `aa:bb:cc:dd:ee:ff` ; les adresses nulle, broadcast et multicast sont refusées. Un nœud ajouté depuis la découverte garde la MAC lue dans la table ARP.
+
+Les champs `mac`, `wolBroadcast`, `webUrlScheme` et `webPort` sont optionnels et se règlent dans « Quick Actions » du formulaire de nœud. Une valeur invalide trouvée dans un fichier est ignorée au chargement (`topology.js` et `topology.rs`) ; les anciens fichiers se chargent sans changement.
+
 ## Où est stockée la topologie
 
 Si vous avez déjà utilisé la build Electron, l’application continue d’utiliser ce fichier :

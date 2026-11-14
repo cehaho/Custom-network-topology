@@ -23,6 +23,9 @@ fn main() {
         "monitor_stop",
         "alerts_notify",
         "image_export",
+        "actions_open_web",
+        "actions_traceroute",
+        "actions_wake",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

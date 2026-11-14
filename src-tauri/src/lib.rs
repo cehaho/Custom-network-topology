@@ -1,4 +1,5 @@
 mod alerts;
+mod actions;
 mod config;
 mod export;
 mod enrich;
@@ -221,11 +222,41 @@ async fn monitor_stop(state: tauri::State<'_, AppState>) -> Result<Value, String
     Ok(serde_json::json!({ "success": true }))
 }
 
+#[tauri::command]
+fn actions_open_web(
+    app: tauri::AppHandle,
+    address: String,
+    scheme: Option<String>,
+    port: Option<u16>,
+) -> Value {
+    use tauri_plugin_opener::OpenerExt;
+    let Some(url) = actions::build_web_url(&address, scheme.as_deref(), port) else {
+        return serde_json::json!({ "success": false, "error": "Invalid address, scheme or port" });
+    };
+    match app.opener().open_url(url.as_str(), None::<&str>) {
+        Ok(()) => serde_json::json!({ "success": true, "url": url }),
+        Err(error) => {
+            serde_json::json!({ "success": false, "url": url, "error": error.to_string() })
+        }
+    }
+}
+
+#[tauri::command]
+async fn actions_traceroute(host: String) -> Value {
+    actions::traceroute(&host).await
+}
+
+#[tauri::command]
+async fn actions_wake(mac: String, broadcast: Option<String>) -> Value {
+    actions::wake(&mac, broadcast.as_deref()).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             ssh: Arc::new(Mutex::new(ssh::Hub::new())),
             monitor: Mutex::new(None),
@@ -265,6 +296,9 @@ pub fn run() {
             monitor_stop,
             alerts::alerts_notify,
             export::image_export,
+            actions_open_web,
+            actions_traceroute,
+            actions_wake,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

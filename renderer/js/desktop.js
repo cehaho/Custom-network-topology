@@ -65,6 +65,11 @@
     alerts: {
       notify: (title, body) => invoke('alerts_notify', { title, body })
     },
+    actions: {
+      openWeb: (address, scheme, port) => invoke('actions_open_web', { address, scheme, port }),
+      traceroute: (host) => invoke('actions_traceroute', { host }),
+      wake: (mac, broadcast) => invoke('actions_wake', { mac, broadcast })
+    },
     platform,
     isDesktop: true
   };
